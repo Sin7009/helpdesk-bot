@@ -1,0 +1,14 @@
+[Unit]
+Description=Omnichannel Support Bot
+After=network.target
+
+[Service]
+User=sin7009
+WorkingDirectory=/home/sin7009/support-bot
+ExecStart=/usr/local/bin/uv run main.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/sin7009/support-bot/.env
+
+[Install]
+WantedBy=multi-user.target
