@@ -82,7 +82,7 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
             has_active_ticket = False
             if user:
                 res_t = await session.execute(select(Ticket).where(Ticket.user_id == user.id, Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])))
-                if res_t.scalar_one_or_none():
+                if res_t.first():
                     has_active_ticket = True
             
             if has_active_ticket:
