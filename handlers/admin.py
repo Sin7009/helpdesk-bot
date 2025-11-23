@@ -87,6 +87,30 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
                 await message.answer("Тикет не найден или уже закрыт.")
         except:
             await message.answer("Формат: /close ID")
+            
+@router.callback_query(F.data.startswith("close_"))
+async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
+    async with new_session() as session:
+        if not await is_admin_or_mod(callback.from_user.id, session):
+            await callback.answer("У вас нет прав.", show_alert=True)
+            return
+
+        t_id = int(callback.data.split("_")[1])
+        ticket = await session.get(Ticket, t_id)
+        
+        if ticket and ticket.status != TicketStatus.CLOSED:
+            ticket.status = TicketStatus.CLOSED
+            ticket.closed_at = func.now()
+            await session.commit()
+            
+            # Уведомляем студента
+            try:
+                await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
+            except: pass
+            
+            await callback.message.edit_text(f"{callback.message.text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
+        else:
+            await callback.answer("Тикет уже закрыт или не найден.")
 
 # --- ЛОГИКА ОТПРАВКИ ---
 async def process_reply(bot, session, ticket_id, text, message, close=False):
