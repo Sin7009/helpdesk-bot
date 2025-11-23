@@ -1,15 +1,19 @@
-name: Deploy
+name: Deploy to Server
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to Server
-        uses: appleboy/ssh-action@master
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
@@ -17,5 +21,4 @@ jobs:
           script: |
             cd /home/sin7009/support-bot
             git pull origin main
-            uv sync
-            sudo systemctl restart support-bot
+            docker compose up -d --build

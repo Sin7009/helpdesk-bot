@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    container_name: helpdesk_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      # Прокидываем файл БД наружу, чтобы не потерять данные
+      - ./data:/app/data
+    environment:
+      # Переопределяем путь к БД, чтобы она легла в volume
+      - DB_NAME=/app/data/support.db
