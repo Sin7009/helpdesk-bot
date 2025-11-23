@@ -67,6 +67,8 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
+    if message.from_user.id == settings.TG_ADMIN_ID and message.reply_to_message:
+        return
     async with new_session() as session:
         # 1. Проверка FAQ
         stmt = select(FAQ)
