@@ -1,4 +1,5 @@
-from aiogram import Router, types
+import re
+from aiogram import Router, F, types, Bot # Добавь Bot и F
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, delete
 from database.setup import new_session
@@ -197,5 +198,32 @@ async def admin_reply(message: types.Message, command: CommandObject, bot):
                 await message.answer(f"Тикет #{t_id} закрыт.")
             except Exception as e:
                 await message.answer(f"Ошибка отправки: {e}")
+        else:
+            await message.answer("Тикет не найден.")
+    # --- NATIVE REPLY (Ответ свайпом) ---
+@router.message(F.reply_to_message & (F.from_user.id == settings.TG_ADMIN_ID))
+async def admin_reply_native(message: types.Message, bot: Bot):
+    # Ищем ID тикета в тексте сообщения, на которое ответили
+    origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    match = re.search(r"#(\d+)", origin_text)
+    
+    if not match:
+        await message.answer("⚠️ Не нашел ID тикета (вид #123) в сообщении.")
+        return
+
+    ticket_id = int(match.group(1))
+    answer_text = message.text
+    
+    async with new_session() as session:
+        ticket = await session.get(Ticket, ticket_id)
+        if ticket:
+            try:
+                await bot.send_message(ticket.user_id, f"👨‍💼 <b>Ответ:</b>\n{answer_text}", parse_mode="HTML")
+                ticket.status = TicketStatus.CLOSED
+                ticket.closed_at = func.now() # Обновляем дату закрытия
+                await session.commit()
+                await message.answer(f"✅ Тикет #{ticket_id} закрыт.")
+            except Exception as e:
+                await message.answer(f"❌ Ошибка: {e}")
         else:
             await message.answer("Тикет не найден.")
