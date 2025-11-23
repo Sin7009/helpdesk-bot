@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from database.models import User, SourceType
+from database.models import User, SourceType, UserRole
+from core.config import settings
 
 async def get_or_create_user(
     session: AsyncSession,
@@ -43,3 +44,30 @@ async def get_or_create_user(
         await session.refresh(user)
 
     return user
+
+async def ensure_admin_exists(session: AsyncSession):
+    """
+    Ensures that the root admin exists and has the correct role.
+    """
+    admin_id = settings.TG_ADMIN_ID
+    if not admin_id:
+        return
+
+    stmt = select(User).where(User.external_id == admin_id, User.source == SourceType.TELEGRAM)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if user:
+        if user.role != UserRole.ADMIN:
+            user.role = UserRole.ADMIN
+            await session.commit()
+    else:
+        user = User(
+            external_id=admin_id,
+            source=SourceType.TELEGRAM,
+            role=UserRole.ADMIN,
+            username="RootAdmin",
+            full_name="Root Admin"
+        )
+        session.add(user)
+        await session.commit()
