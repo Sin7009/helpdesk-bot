@@ -1,40 +1,35 @@
 import asyncio
 import logging
-from aiogram import Bot as AiogramBot, Dispatcher
-
+from aiogram import Bot, Dispatcher
 from core.config import settings
 from core.logger import setup_logger
 from database.setup import init_db
-from handlers.telegram import register_handlers as register_tg_handlers
-
-logger = setup_logger("main")
+from handlers.telegram import router as tg_router  # <-- Берем роутер, а не функцию регистрации
 
 async def main():
+    # 1. Логирование
+    setup_logger()
+    logger = logging.getLogger(__name__)
     logger.info("Starting Support Bot...")
 
-    # Initialize Database
+    # 2. База данных
     await init_db()
     logger.info("Database initialized.")
 
-    # Initialize Bots
-    tg_bot = AiogramBot(token=settings.TG_BOT_TOKEN)
+    # 3. Бот и Диспетчер
+    bot = Bot(token=settings.TG_BOT_TOKEN)
     dp = Dispatcher()
 
-    # Register Handlers
-    register_tg_handlers(dp)
+    # 4. Подключаем логику (Роутер)
+    dp.include_router(tg_router)
 
-    # Run Bots
+    # 5. Запуск
     logger.info("Telegram Bot starting polling...")
-
-    try:
-        await dp.start_polling(tg_bot)
-    except Exception as e:
-        logger.error(f"An error occurred: {e}")
-    finally:
-        await tg_bot.session.close()
+    await bot.delete_webhook(drop_pending_updates=True) # Удаляем вебхук на всякий случай
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped.")
+        logging.info("Bot stopped")
