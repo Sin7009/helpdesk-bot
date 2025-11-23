@@ -9,6 +9,8 @@ from database.setup import new_session
 from services.ticket_service import create_ticket
 from database.models import Ticket, TicketStatus, User, FAQ, SourceType
 
+from core.config import settings
+
 router = Router()
 
 class TicketForm(StatesGroup):
