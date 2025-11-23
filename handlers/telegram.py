@@ -3,274 +3,125 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from sqlalchemy import select
+
 from database.setup import new_session
-from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
-from database.models import Ticket, TicketStatus, Category
-from sqlalchemy import select, delete
+from services.ticket_service import create_ticket
+from database.models import Ticket, TicketStatus, User
 from core.config import settings
-from datetime import datetime
 
 router = Router()
 
-# --- CONSTANTS ---
+# --- ДАННЫЕ ---
 FAQ_DATA = {
     "wifi": "📶 <b>Wi-Fi:</b> Сеть `MGPU_Student`, Пароль: `mgpu2024`",
     "вайфай": "📶 <b>Wi-Fi:</b> Сеть `MGPU_Student`, Пароль: `mgpu2024`",
-    "пароль": "🔑 Сбросить пароль от ЛК можно в кабинете 205 или на сайте lk.mgpu.ru",
-    "справк": "📄 Заказать справку можно через Личный Кабинет -> Раздел 'Услуги'.",
-    "стипенди": "💰 Стипендия приходит 25-го числа каждого месяца на карту МИР."
+    "пароль": "🔑 Сбросить пароль: lk.mgpu.ru или каб. 205",
+    "справк": "📄 Справки: Личный Кабинет -> Услуги",
+    "стипенди": "💰 Стипендия: 25-го числа на карту МИР"
 }
 
 class TicketForm(StatesGroup):
-    waiting_category = State()
-    waiting_initial_text = State() # Used to store text if user sent message first
+    waiting_text = State()
 
-# --- KEYBOARDS ---
-async def get_main_menu_kb(session):
-    # Dynamic categories
-    result = await session.execute(select(Category))
-    categories = result.scalars().all()
+# --- КЛАВИАТУРЫ ---
+def get_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎓 Учеба", callback_data="cat_study"),
+         InlineKeyboardButton(text="📄 Справки", callback_data="cat_docs")],
+        [InlineKeyboardButton(text="💻 IT / ЛК", callback_data="cat_it"),
+         InlineKeyboardButton(text="🏠 Общежитие", callback_data="cat_dorm")],
+        [InlineKeyboardButton(text="❓ Частые вопросы", callback_data="show_faq")]
+    ])
 
-    keyboard = []
-    row = []
-    for cat in categories:
-        row.append(InlineKeyboardButton(text=cat.name, callback_data=f"cat_{cat.id}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton(text="❓ Частые вопросы (FAQ)", callback_data="show_faq")])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-# --- HANDLERS ---
+# --- ЛОГИКА ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    async with new_session() as session:
-        kb = await get_main_menu_kb(session)
-
     await message.answer(
-        f"Привет, {message.from_user.first_name}! 👋\n"
-        "Я бот поддержки. Выберите тему вопроса, и мы поможем:",
-        reply_markup=kb
+        f"Привет, {message.from_user.first_name}! 👋\nВыберите тему обращения:",
+        reply_markup=get_menu_kb()
     )
 
 @router.callback_query(F.data == "show_faq")
 async def show_faq(callback: types.CallbackQuery):
-    text = "📚 <b>База знаний:</b>\n\n"
-    for key, val in FAQ_DATA.items():
-        text += f"🔹 {key.capitalize()}: {val}\n"
-    await callback.message.answer(text, parse_mode="HTML")
+    text = "\n".join([f"🔹 {v}" for v in FAQ_DATA.values()])
+    await callback.message.answer(f"📚 <b>FAQ:</b>\n\n{text}", parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("cat_"))
-async def select_category(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-    cat_id = int(callback.data.split("_")[1])
+async def select_cat(callback: types.CallbackQuery, state: FSMContext):
+    cat_map = {"cat_study": "Учеба", "cat_docs": "Справки", "cat_it": "IT", "cat_dorm": "Общежитие"}
+    category = cat_map.get(callback.data, "Общее")
     
-    data = await state.get_data()
-    initial_text = data.get("initial_text")
-    
-    async with new_session() as session:
-        # Get category name
-        category = await session.get(Category, cat_id)
-        if not category:
-            await callback.answer("Категория не найдена", show_alert=True)
-            return
-
-        if initial_text:
-            # Create ticket immediately
-            ticket = await create_ticket(
-                session,
-                callback.from_user.id,
-                "tg",
-                initial_text,
-                bot,
-                category.name,
-                user_full_name=callback.from_user.full_name
-            )
-            await callback.message.edit_text(f"✅ <b>Заявка #{ticket.daily_id} принята!</b>\nТема: {category.name}\nМы скоро ответим.", parse_mode="HTML")
-            await state.clear()
-        else:
-            # Wait for text
-            await state.update_data(category_name=category.name)
-            await state.set_state(TicketForm.waiting_initial_text)
-            await callback.message.edit_text(
-                f"Тема: <b>{category.name}</b>.\n✍️ Опишите вашу проблему одним сообщением:",
-                parse_mode="HTML"
-            )
-
-@router.message(TicketForm.waiting_initial_text)
-async def process_initial_ticket_text(message: types.Message, state: FSMContext, bot: Bot):
-    text = message.text
-    
-    # Auto-FAQ check could go here, but requirements emphasize Dialogue Mode
-
-    data = await state.get_data()
-    category_name = data.get("category_name", "General")
-
-    async with new_session() as session:
-        ticket = await create_ticket(
-            session, message.from_user.id, "tg", text, bot, category_name, user_full_name=message.from_user.full_name
-        )
-    
-    await message.answer(f"✅ <b>Заявка #{ticket.daily_id} принята!</b>\nМы скоро ответим.", parse_mode="HTML")
-    await state.clear()
-
+    await state.update_data(category=category)
+    await state.set_state(TicketForm.waiting_text)
+    await callback.message.edit_text(f"Тема: <b>{category}</b>.\n✍️ Напишите ваш вопрос:", parse_mode="HTML")
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_text_message(message: types.Message, state: FSMContext, bot: Bot):
-    # 1. Check if user has active ticket
+async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
+    # 1. Проверка FAQ (быстрый ответ)
+    for k, v in FAQ_DATA.items():
+        if k in message.text.lower():
+            await message.answer(f"🤖 <b>Подсказка:</b>\n{v}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
+            return
+
+    # 2. Проверка состояния (ждет ли бот вопрос?)
+    current_state = await state.get_state()
+    
+    # Если мы НЕ ждем вопрос (студент просто написал "Привет")
+    if current_state != TicketForm.waiting_text:
+        # Проверим, может у него уже есть ОТКРЫТЫЙ тикет?
+        async with new_session() as session:
+            # Ищем юзера и активный тикет
+            # (Упрощенная логика: если тикет есть, добавляем сообщение. Если нет — просим категорию)
+            result = await session.execute(select(User).where(User.external_id == message.from_user.id))
+            user = result.scalar_one_or_none()
+            
+            has_active_ticket = False
+            if user:
+                res_t = await session.execute(select(Ticket).where(Ticket.user_id == user.id, Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])))
+                if res_t.scalar_one_or_none():
+                    has_active_ticket = True
+            
+            if has_active_ticket:
+                # Добавляем в существующий (через сервис)
+                await create_ticket(session, message.from_user.id, "tg", message.text, bot, "Existing")
+                await message.answer("✅ Сообщение добавлено к вашей заявке.")
+                return
+            else:
+                # Тикета нет, состояние не установлено -> Показываем меню
+                await message.answer(
+                    "Чтобы задать вопрос, пожалуйста, сначала выберите категорию:",
+                    reply_markup=get_menu_kb() # <--- ВОТ ОНО, СПАСЕНИЕ
+                )
+                return
+
+    # 3. Создание нового тикета (если состояние waiting_text)
+    data = await state.get_data()
+    category = data.get("category", "Общее")
+    
     async with new_session() as session:
-        active_ticket = await get_active_ticket(session, message.from_user.id, "tg")
+        t = await create_ticket(session, message.from_user.id, "tg", message.text, bot, category)
+    
+    await message.answer(f"✅ <b>Заявка #{t.id} создана!</b>", parse_mode="HTML")
+    await state.clear()
 
-        if active_ticket:
-            # 2. Append to active ticket
-            await add_message_to_ticket(session, active_ticket, message.text, bot)
-            # Confirm to user? Usually silent or "sent".
-            # Requirement says: "Append message... Notify admin".
-            # Doesn't explicitly say notify user, but good UX is a checkmark or silent.
-            # To avoid spamming user, maybe just reaction?
-            # Or text confirmation.
-            # "Message added to request #{id}"
-            await message.reply("✅ Сообщение добавлено к вашей заявке.", disable_notification=True)
-        else:
-            # 3. No active ticket -> Trigger Category Selection
-            # Save text for later
-            await state.update_data(initial_text=message.text)
-
-            kb = await get_main_menu_kb(session)
-            await message.answer(
-                "У вас нет активных заявок. Пожалуйста, выберите категорию, чтобы создать новую:",
-                reply_markup=kb
-            )
-
-# --- ADMIN COMMANDS ---
-
-@router.message(Command("add_category"))
-async def add_category(message: types.Message):
-    if message.from_user.id != settings.TG_ADMIN_ID: return
-
-    args = message.text.split(" ", 1)
-    if len(args) < 2:
-        await message.answer("⚠️ Использование: `/add_category Название`")
-        return
-
-    name = args[1].strip()
-    async with new_session() as session:
-        try:
-            session.add(Category(name=name))
-            await session.commit()
-            await message.answer(f"✅ Категория '{name}' добавлена.")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
-
-@router.message(Command("del_category"))
-async def del_category(message: types.Message):
-    if message.from_user.id != settings.TG_ADMIN_ID: return
-
-    args = message.text.split(" ", 1)
-    if len(args) < 2:
-        await message.answer("⚠️ Использование: `/del_category Название`")
-        return
-
-    name = args[1].strip()
-    async with new_session() as session:
-        # Check if used?
-        # Simple delete for now
-        result = await session.execute(select(Category).where(Category.name == name))
-        cat = result.scalar_one_or_none()
-        if cat:
-            await session.delete(cat)
-            await session.commit()
-            await message.answer(f"✅ Категория '{name}' удалена.")
-        else:
-            await message.answer("❌ Категория не найдена.")
-
+# --- АДМИНКА ---
 @router.message(Command("reply"))
 async def admin_reply(message: types.Message, bot: Bot):
     if message.from_user.id != settings.TG_ADMIN_ID: return
-
     try:
-        args = message.text.split(" ", 2)
-        if len(args) < 3:
-            await message.answer("⚠️ Формат: `/reply ID Текст`")
-            return
-            
-        ticket_id = int(args[1])
-        reply_text = args[2]
-
+        _, t_id, text = message.text.split(" ", 2)
         async with new_session() as session:
-            ticket = await session.get(Ticket, ticket_id)
-            if not ticket:
-                await message.answer("❌ Тикет не найден.")
-                return
-            
-            # Send to user
-            try:
-                await bot.send_message(
-                    ticket.user_id, 
-                    f"👨‍💼 <b>Ответ оператора:</b>\n\n{reply_text}", 
-                    parse_mode="HTML"
-                )
-
-                # Add message to history (Admin role)
-                msg = Message(ticket_id=ticket.id, sender_role="admin", text=reply_text)
-                session.add(msg)
+            ticket = await session.get(Ticket, int(t_id))
+            if ticket:
+                await bot.send_message(ticket.user_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
+                ticket.status = TicketStatus.CLOSED
                 await session.commit()
-
-                # Keep open
-                await message.answer(f"✅ Ответ отправлен в тикет #{ticket_id}.")
-            except Exception as e:
-                await message.answer(f"❌ Ошибка отправки: {e}")
-
-    except ValueError:
-        await message.answer("❌ ID тикета должен быть числом.")
-
-@router.message(Command("close"))
-async def close_ticket_command(message: types.Message, bot: Bot):
-    if message.from_user.id != settings.TG_ADMIN_ID: return
-
-    try:
-        args = message.text.split(" ", 1)
-        if len(args) < 2:
-            await message.answer("⚠️ Формат: `/close ID`")
-            return
-
-        ticket_id = int(args[1])
-        await close_ticket_logic(ticket_id, bot, message)
-    except ValueError:
-        await message.answer("❌ ID должен быть числом.")
-
-@router.callback_query(F.data.startswith("close_ticket_"))
-async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
-    if callback.from_user.id != settings.TG_ADMIN_ID: return
-
-    ticket_id = int(callback.data.split("_")[2])
-    await close_ticket_logic(ticket_id, bot, callback.message)
-    await callback.answer("Тикет закрыт")
-
-async def close_ticket_logic(ticket_id: int, bot: Bot, admin_message: types.Message):
-    async with new_session() as session:
-        ticket = await session.get(Ticket, ticket_id)
-        if not ticket:
-            await admin_message.answer("❌ Тикет не найден.")
-            return
-
-        if ticket.status == TicketStatus.CLOSED:
-            await admin_message.answer("⚠️ Тикет уже закрыт.")
-            return
-
-        ticket.status = TicketStatus.CLOSED
-        ticket.closed_at = datetime.now()
-        await session.commit()
-
-        await admin_message.answer(f"✅ Тикет #{ticket_id} закрыт.")
-
-        # Notify user
-        try:
-            await bot.send_message(ticket.user_id, f"✅ Ваша заявка #{ticket.daily_id} закрыта. Спасибо за обращение!")
-        except:
-            pass
+                await message.answer(f"Тикет #{t_id} закрыт.")
+            else:
+                await message.answer("Тикет не найден.")
+    except:
+        await message.answer("Ошибка. Пиши: /reply ID Текст")
