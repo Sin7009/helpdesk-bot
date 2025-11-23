@@ -8,7 +8,7 @@ from handlers.telegram import router as tg_router  # <-- Берем роутер
 
 async def main():
     # 1. Логирование
-    setup_logger()
+    setup_logger("bot")
     logger = logging.getLogger(__name__)
     logger.info("Starting Support Bot...")
 
