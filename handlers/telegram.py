@@ -7,19 +7,10 @@ from sqlalchemy import select
 
 from database.setup import new_session
 from services.ticket_service import create_ticket
-from database.models import Ticket, TicketStatus, User
+from database.models import Ticket, TicketStatus, User, FAQ
 from core.config import settings
 
 router = Router()
-
-# --- ДАННЫЕ ---
-FAQ_DATA = {
-    "wifi": "📶 <b>Wi-Fi:</b> Сеть `MGPU_Student`, Пароль: `mgpu2024`",
-    "вайфай": "📶 <b>Wi-Fi:</b> Сеть `MGPU_Student`, Пароль: `mgpu2024`",
-    "пароль": "🔑 Сбросить пароль: lk.mgpu.ru или каб. 205",
-    "справк": "📄 Справки: Личный Кабинет -> Услуги",
-    "стипенди": "💰 Стипендия: 25-го числа на карту МИР"
-}
 
 class TicketForm(StatesGroup):
     waiting_text = State()
@@ -46,7 +37,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "show_faq")
 async def show_faq(callback: types.CallbackQuery):
-    text = "\n".join([f"🔹 {v}" for v in FAQ_DATA.values()])
+    async with new_session() as session:
+        stmt = select(FAQ).order_by(FAQ.trigger_word)
+        result = await session.execute(stmt)
+        faqs = result.scalars().all()
+
+    if faqs:
+        text = "\n".join([f"🔹 {f.answer_text}" for f in faqs])
+    else:
+        text = "FAQ пока пуст."
+
     await callback.message.answer(f"📚 <b>FAQ:</b>\n\n{text}", parse_mode="HTML")
     await callback.answer()
 
@@ -61,19 +61,29 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
-    # 1. Проверка FAQ (быстрый ответ)
-    for k, v in FAQ_DATA.items():
-        if k in message.text.lower():
-            await message.answer(f"🤖 <b>Подсказка:</b>\n{v}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
-            return
+    async with new_session() as session:
+        # 1. Проверка FAQ (быстрый ответ)
+        # We fetch all FAQs. For a large number of FAQs, Full Text Search would be better,
+        # but for now iterating in memory (or SQL LIKE) is fine.
+        # Given we need to check if trigger word is IN the message, we can't easily do WHERE message LIKE %trigger%.
+        # We have to do WHERE 'message' LIKE %trigger% -> reverse like? No.
+        # Better: fetch all triggers and check in python if list is small.
+        # Or: SELECT * FROM faq.
+        stmt = select(FAQ)
+        result = await session.execute(stmt)
+        faqs = result.scalars().all()
 
-    # 2. Проверка состояния (ждет ли бот вопрос?)
-    current_state = await state.get_state()
-    
-    # Если мы НЕ ждем вопрос (студент просто написал "Привет")
-    if current_state != TicketForm.waiting_text:
-        # Проверим, может у него уже есть ОТКРЫТЫЙ тикет?
-        async with new_session() as session:
+        for faq in faqs:
+             if faq.trigger_word.lower() in message.text.lower():
+                await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
+                return
+
+        # 2. Проверка состояния (ждет ли бот вопрос?)
+        current_state = await state.get_state()
+
+        # Если мы НЕ ждем вопрос (студент просто написал "Привет")
+        if current_state != TicketForm.waiting_text:
+            # Проверим, может у него уже есть ОТКРЫТЫЙ тикет?
             # Ищем юзера и активный тикет
             # (Упрощенная логика: если тикет есть, добавляем сообщение. Если нет — просим категорию)
             result = await session.execute(select(User).where(User.external_id == message.from_user.id))
@@ -94,34 +104,15 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
                 # Тикета нет, состояние не установлено -> Показываем меню
                 await message.answer(
                     "Чтобы задать вопрос, пожалуйста, сначала выберите категорию:",
-                    reply_markup=get_menu_kb() # <--- ВОТ ОНО, СПАСЕНИЕ
+                    reply_markup=get_menu_kb()
                 )
                 return
 
-    # 3. Создание нового тикета (если состояние waiting_text)
-    data = await state.get_data()
-    category = data.get("category", "Общее")
-    
-    async with new_session() as session:
+        # 3. Создание нового тикета (если состояние waiting_text)
+        data = await state.get_data()
+        category = data.get("category", "Общее")
+
         t = await create_ticket(session, message.from_user.id, "tg", message.text, bot, category)
     
     await message.answer(f"✅ <b>Заявка #{t.id} создана!</b>", parse_mode="HTML")
     await state.clear()
-
-# --- АДМИНКА ---
-@router.message(Command("reply"))
-async def admin_reply(message: types.Message, bot: Bot):
-    if message.from_user.id != settings.TG_ADMIN_ID: return
-    try:
-        _, t_id, text = message.text.split(" ", 2)
-        async with new_session() as session:
-            ticket = await session.get(Ticket, int(t_id))
-            if ticket:
-                await bot.send_message(ticket.user_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
-                ticket.status = TicketStatus.CLOSED
-                await session.commit()
-                await message.answer(f"Тикет #{t_id} закрыт.")
-            else:
-                await message.answer("Тикет не найден.")
-    except:
-        await message.answer("Ошибка. Пиши: /reply ID Текст")

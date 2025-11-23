@@ -21,6 +21,11 @@ class SenderRole(str, PyEnum):
     USER = "user"
     ADMIN = "admin"
 
+class UserRole(str, PyEnum):
+    USER = "user"
+    MODERATOR = "moderator"
+    ADMIN = "admin"
+
 class User(Base):
     __tablename__ = "users"
 
@@ -29,6 +34,7 @@ class User(Base):
     external_id: Mapped[int] = mapped_column(BigInteger, index=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    role: Mapped[UserRole] = mapped_column(String(20), default=UserRole.USER)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -79,3 +85,10 @@ class Message(Base):
     )
 
     ticket: Mapped["Ticket"] = relationship(back_populates="messages")
+
+class FAQ(Base):
+    __tablename__ = "faq"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trigger_word: Mapped[str] = mapped_column(String(255), unique=True)
+    answer_text: Mapped[str] = mapped_column(Text)
