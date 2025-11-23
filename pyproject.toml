@@ -31,6 +31,7 @@ dependencies = [
     "typing-extensions==4.15.0",
     "typing-inspection==0.4.2",
     "yarl==1.22.0",
+    "apscheduler>=3.11.1",
 ]
 
 [tool.pytest.ini_options]

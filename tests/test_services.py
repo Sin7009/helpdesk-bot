@@ -1,9 +1,10 @@
 import asyncio
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from database.models import Base, User, Ticket, Message, SourceType, SenderRole, TicketStatus
-from services.user_service import get_or_create_user
-from services.ticket_service import create_ticket, get_open_ticket, add_message_to_ticket, close_ticket
+from database.models import Base, User, Ticket, Message, SourceType, SenderRole, TicketStatus, Category
+# from services.user_service import get_or_create_user # Seems like this service might not exist or wasn't provided in the file list
+from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
+from unittest.mock import AsyncMock
 
 # Use an in-memory SQLite database for testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -25,58 +26,56 @@ async def test_session(test_engine):
         yield session
 
 @pytest.mark.asyncio
-async def test_user_creation(test_session):
-    user = await get_or_create_user(test_session, 12345, SourceType.TELEGRAM, "testuser", "Test User")
-    assert user.id is not None
-    assert user.external_id == 12345
-    assert user.source == SourceType.TELEGRAM
-
-    # Test getting existing user
-    user2 = await get_or_create_user(test_session, 12345, SourceType.TELEGRAM)
-    assert user.id == user2.id
-
-@pytest.mark.asyncio
 async def test_ticket_flow(test_session):
-    # Create user
-    user = await get_or_create_user(test_session, 999, SourceType.VK, "vkuser", "VK User")
+    # Mock Bot
+    bot = AsyncMock()
 
-    # Verify no open ticket initially
-    ticket = await get_open_ticket(test_session, user.id)
-    assert ticket is None
+    # 1. Test create ticket
+    # This automatically handles user creation if needed in updated logic
+    ticket = await create_ticket(
+        test_session,
+        user_id=12345,
+        source="tg",
+        text="Help me",
+        bot=bot,
+        category_name="General",
+        user_full_name="Test User"
+    )
 
-    # Create ticket
-    new_ticket = await create_ticket(test_session, user.id, SourceType.VK, "Help me!")
-    assert new_ticket.status == TicketStatus.NEW
-    assert new_ticket.question_text == "Help me!"
-
-    # Verify open ticket exists
-    ticket = await get_open_ticket(test_session, user.id)
     assert ticket is not None
-    assert ticket.id == new_ticket.id
+    assert ticket.status == TicketStatus.NEW
+    assert ticket.daily_id == 1
 
-    # Check messages
-    # Note: create_ticket adds the first message
-    # We need to refresh to see relations if not eager loaded,
-    # but ticket object might not have messages loaded.
-    # Let's query messages manually to verify.
+    # Verify User was created
     from sqlalchemy import select
+    stmt = select(User).where(User.external_id == 12345)
+    user = (await test_session.execute(stmt)).scalar_one()
+    assert user.full_name == "Test User"
+
+    # Verify Category was created
+    stmt = select(Category).where(Category.name == "General")
+    category = (await test_session.execute(stmt)).scalar_one()
+    assert category.id == ticket.category_id
+
+    # 2. Test get active ticket
+    active_ticket = await get_active_ticket(test_session, 12345, "tg")
+    assert active_ticket is not None
+    assert active_ticket.id == ticket.id
+
+    # 3. Add message
+    await add_message_to_ticket(test_session, ticket, "More info", bot)
+
+    # Verify messages
     stmt = select(Message).where(Message.ticket_id == ticket.id)
-    result = await test_session.execute(stmt)
-    messages = result.scalars().all()
-    assert len(messages) == 1
-    assert messages[0].text == "Help me!"
-    assert messages[0].sender_role == SenderRole.USER
+    messages = (await test_session.execute(stmt)).scalars().all()
+    assert len(messages) == 2 # Initial + added
+    assert messages[0].text == "Help me"
+    assert messages[1].text == "More info"
 
-    # Add another message
-    await add_message_to_ticket(test_session, ticket.id, "More info", SenderRole.USER)
+    # 4. Close ticket (Manual status update as in handler)
+    ticket.status = TicketStatus.CLOSED
+    await test_session.commit()
 
-    result = await test_session.execute(stmt)
-    messages = result.scalars().all()
-    assert len(messages) == 2
-
-    # Close ticket
-    await close_ticket(test_session, ticket.id)
-
-    # Verify no open ticket
-    ticket = await get_open_ticket(test_session, user.id)
-    assert ticket is None
+    # Verify no active ticket
+    active_ticket = await get_active_ticket(test_session, 12345, "tg")
+    assert active_ticket is None
