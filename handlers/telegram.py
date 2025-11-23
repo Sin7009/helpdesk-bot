@@ -13,22 +13,11 @@ from services.ticket_service import (
     get_open_ticket,
     create_ticket,
     add_message_to_ticket,
-    get_ticket_by_id
+    get_ticket_by_id,
+    close_ticket
 )
-from vkbottle import API as VkAPI
 
 logger = setup_logger("tg_bot")
-
-# We need a way to access the VK bot to send messages from TG admin
-# We will inject it or set it globally in main.py
-vk_api: VkAPI | None = None
-
-def set_vk_api(api: VkAPI):
-    """
-    Sets the global VK API instance for cross-platform message routing.
-    """
-    global vk_api
-    vk_api = api
 
 async def handle_start(message: Message):
     """
@@ -129,25 +118,15 @@ async def handle_admin_reply(message: Message, bot: Bot):
             try:
                 await bot.send_message(ticket.user.external_id, f"Support Reply:\n{reply_text}")
                 await message.answer(f"Reply sent to TG user {ticket.user.external_id}.")
+
+                # Close the ticket as per requirement
+                await close_ticket(session, ticket.id)
+                await message.answer(f"Ticket #{ticket.id} closed.")
             except Exception as e:
                 logger.error(f"Failed to send to TG user: {e}")
                 await message.answer(f"Failed to send to TG user: {e}")
-        elif ticket.source == SourceType.VK:
-            if vk_api:
-                try:
-                    # random_id is required for VK messages
-                    import random
-                    await vk_api.messages.send(
-                        peer_id=ticket.user.external_id,
-                        message=f"Support Reply:\n{reply_text}",
-                        random_id=random.randint(0, 2**20)
-                    )
-                    await message.answer(f"Reply sent to VK user {ticket.user.external_id}.")
-                except Exception as e:
-                    logger.error(f"Failed to send to VK user: {e}")
-                    await message.answer(f"Failed to send to VK user: {e}")
-            else:
-                await message.answer("VK API not initialized.")
+        else:
+            await message.answer(f"Unsupported source type: {ticket.source}")
 
 def register_handlers(dp: Dispatcher):
     """
