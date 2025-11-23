@@ -4,13 +4,14 @@ from aiogram import Bot, Dispatcher
 from core.config import settings
 from core.logger import setup_logger
 from database.setup import init_db
-from handlers.telegram import router as tg_router  # <-- Берем роутер, а не функцию регистрации
+from handlers.telegram import router as tg_router
+from services.scheduler import setup_scheduler
 
 async def main():
     # 1. Логирование
     setup_logger("bot")
     logger = logging.getLogger(__name__)
-    logger.info("Starting Support Bot...")
+    logger.info("Starting Support Bot v2.0...")
 
     # 2. База данных
     await init_db()
@@ -23,10 +24,17 @@ async def main():
     # 4. Подключаем логику (Роутер)
     dp.include_router(tg_router)
 
-    # 5. Запуск
+    # 5. Запуск планировщика
+    scheduler = setup_scheduler(bot)
+    logger.info("Scheduler started.")
+
+    # 6. Запуск
     logger.info("Telegram Bot starting polling...")
-    await bot.delete_webhook(drop_pending_updates=True) # Удаляем вебхук на всякий случай
-    await dp.start_polling(bot)
+    await bot.delete_webhook(drop_pending_updates=True)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        scheduler.shutdown()
 
 if __name__ == "__main__":
     try:

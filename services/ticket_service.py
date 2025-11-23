@@ -1,68 +1,161 @@
 import logging
+import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole
+from sqlalchemy import select, func, desc
+from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
 from core.config import settings
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
-async def create_ticket(session: AsyncSession, user_id: int, source: str, text: str, bot: Bot, category: str = "General"):
-    # 1. Находим или создаем пользователя
-    # Используем select().limit(1) для эффективности
+async def get_active_ticket(session: AsyncSession, user_id: int, source: str) -> Ticket | None:
+    """Finds an active ticket for the user."""
+    # 1. Get user
     result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
     user = result.scalar_one_or_none()
     
     if not user:
-        # Если юзера нет, создаем. Имя обновим потом через апдейт, если нужно.
-        user = User(external_id=user_id, source=source, username="User")
-        session.add(user)
-        await session.flush() # Чтобы получить user.id сразу
+        return None
     
-    # 2. Ищем активный тикет
+    # 2. Find active ticket
     result = await session.execute(
         select(Ticket).where(
             Ticket.user_id == user.id, 
             Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])
         ).limit(1)
     )
-    active_ticket = result.scalar_one_or_none()
+    return result.scalar_one_or_none()
 
-    is_new = False
+async def get_user_history(session: AsyncSession, user_id: int) -> list[Ticket]:
+    """Get last 3 tickets for history."""
+    result = await session.execute(
+        select(Ticket)
+        .where(Ticket.user_id == user_id)
+        .order_by(desc(Ticket.created_at))
+        .limit(3)
+    )
+    return result.scalars().all()
 
-    # 3. Если нет активного — создаем новый
-    if not active_ticket:
-        is_new = True
-        # В начало текста добавляем категорию для наглядности
-        question_text = f"[{category}] {text}"
-        active_ticket = Ticket(
-            user_id=user.id, 
-            source=source, 
-            question_text=question_text, 
-            status=TicketStatus.NEW
-        )
-        session.add(active_ticket)
-        await session.flush() # Получаем ID тикета
+async def create_ticket(session: AsyncSession, user_id: int, source: str, text: str, bot: Bot, category_name: str, user_full_name: str = "Unknown"):
+    # 1. Find or create user
+    result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(external_id=user_id, source=source, username="User", full_name=user_full_name)
+        session.add(user)
+        await session.flush()
+    else:
+        if user.full_name != user_full_name:
+            user.full_name = user_full_name
+
+    # 2. Get Category
+    result = await session.execute(select(Category).where(Category.name == category_name).limit(1))
+    category = result.scalar_one_or_none()
+    if not category:
+        # Fallback if category not found
+        category = Category(name=category_name)
+        session.add(category)
+        await session.flush()
+
+    # 3. Calculate daily_id
+    today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Count tickets created today
+    stmt = select(func.count(Ticket.id)).where(Ticket.created_at >= today_start)
+    count_result = await session.execute(stmt)
+    today_count = count_result.scalar() or 0
+    daily_id = today_count + 1
     
-    # 4. Сохраняем сообщение в историю
+    # 4. Create Ticket
+    active_ticket = Ticket(
+        user_id=user.id,
+        daily_id=daily_id,
+        category_id=category.id,
+        source=source,
+        question_text=text, # Initial question text
+        status=TicketStatus.NEW
+    )
+    session.add(active_ticket)
+    await session.flush()
+
+    # 5. Save first message
     msg = Message(ticket_id=active_ticket.id, sender_role=SenderRole.USER, text=text)
     session.add(msg)
     
-    # Важно: комитим изменения в БД ДО отправки уведомлений
-    # Если отправка упадет, данные уже будут сохранены
+    # 6. Get history for notification
+    history = await get_user_history(session, user.id)
+    history_text = ""
+    for h in history:
+        if h.id == active_ticket.id: continue # Skip current
+        date_str = h.created_at.strftime("%d.%m.%Y")
+        summary = h.summary or h.question_text[:30] + "..." if h.question_text else "No text"
+        history_text += f"- {date_str}: {summary}\n"
+
+    if not history_text:
+        history_text = "Нет предыдущих обращений"
+
+    # Commit DB changes
     await session.commit()
 
-    # 5. Уведомление админа (Безопасный блок)
-    if is_new:
-        try:
-            admin_text = (
-                f"🔥 <b>Новый тикет #{active_ticket.id}</b>\n"
-                f"Категория: {category}\n"
-                f"Текст: {text}\n\n"
-                f"Ответить: <code>/reply {active_ticket.id} ответ</code>"
-            )
-            await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"⚠️ Не удалось отправить уведомление админу: {e}")
+    # 7. Notify Admin
+    try:
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        ticket_number = f"{date_str}-{daily_id}"
+
+        admin_text = (
+            f"🔔 <b>Новый запрос №{ticket_number}</b> от <a href='tg://user?id={user_id}'>{user_full_name}</a>\n"
+            f"Тема: {category.name}\n\n"
+            f"📜 <b>История:</b>\n{history_text}\n"
+            f"💬 <b>Сообщение:</b>\n{text}"
+        )
+
+        # Add Close button
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
+        ])
+
+        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"⚠️ Failed to notify admin: {e}")
 
     return active_ticket
+
+async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str, bot: Bot):
+    # Add message
+    msg = Message(ticket_id=ticket.id, sender_role=SenderRole.USER, text=text)
+    session.add(msg)
+    await session.commit()
+
+    # Notify Admin
+    try:
+        user = ticket.user
+        category = ticket.category
+        today = datetime.datetime.now()
+        date_str = today.strftime("%Y%m%d")
+        # To reconstruct daily_id accurately for display we rely on stored daily_id.
+        # But wait, create_ticket sets daily_id. But if we restart bot, we read it from DB.
+        # However, the requirement says "Format should be displayed as YYYYMMDD-{daily_id}".
+        # daily_id is stored in Ticket.
+
+        # Check if created today? daily_id is just an integer.
+        # The prompt says "daily_id (integer, reset every day)".
+        # And "Format should be displayed as YYYYMMDD-{daily_id}".
+        # Assuming the daily_id stored in ticket is the N for that day.
+        # So we need the date of creation to form the full ID? Or just today's date?
+        # Usually ID stays same. So use ticket.created_at.
+
+        ticket_date_str = ticket.created_at.strftime("%Y%m%d")
+        ticket_number = f"{ticket_date_str}-{ticket.daily_id}"
+
+        admin_text = (
+            f"📨 <b>Новое сообщение в заявке №{ticket_number}</b>\n"
+            f"От: {user.full_name}\n"
+            f"Тема: {category.name if category else 'Unknown'}\n\n"
+            f"{text}\n\n"
+            f"Ответить: <code>/reply {ticket.id} текст</code>"
+        )
+        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to notify admin about new message: {e}")
