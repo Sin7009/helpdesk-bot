@@ -1,18 +1,17 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # Обязательные переменные (должны быть в .env или environment docker-compose)
+    # Имена переменных должны точно совпадать с тем, что в .env (капсом)
     TG_BOT_TOKEN: str
     TG_ADMIN_ID: int
     
-    # Опциональные (с дефолтом)
-    DB_NAME: str = "support.db" 
+    # Добавляем базу данных с дефолтным значением
+    DB_NAME: str = "/app/data/support.db"
 
-    # Настройки: читать .env и ИГНОРИРОВАТЬ лишние переменные (extra="ignore")
     model_config = SettingsConfigDict(
-        env_file=".env", 
+        env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"  # <-- Это спасет от ошибки "Extra inputs are not permitted"
+        extra="ignore"  # Это заставит бота игнорировать лишние строки в .env
     )
 
 settings = Settings()
