@@ -1,137 +1,118 @@
-import logging
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Router, F, Bot, types
 from aiogram.filters import Command
-from aiogram.types import Message
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from database.setup import new_session
+from services.ticket_service import create_ticket
+from database.models import Ticket
 from core.config import settings
-from core.logger import setup_logger
-from database.setup import get_session
-from database.models import SourceType, SenderRole
-from services.user_service import get_or_create_user
-from services.ticket_service import (
-    get_open_ticket,
-    create_ticket,
-    add_message_to_ticket,
-    get_ticket_by_id,
-    close_ticket
-)
 
-logger = setup_logger("tg_bot")
+router = Router()
 
-async def handle_start(message: Message):
-    """
-    Handles the /start command.
-    """
-    await message.answer("Welcome to Support Bot! Send your question here.")
+# FAQ Словарь (Ключевое слово -> Ответ)
+FAQ_DB = {
+    "стипенди": "💰 Стипендия приходит 25-го числа. Проверьте карту МИР.",
+    "справк": "📄 Заказать справку можно в ЛК студента или в 105 кабинете.",
+    "вайфай": "📶 Сеть: MGPU_Student, Пароль: mgpu2024",
+    "wifi": "📶 Сеть: MGPU_Student, Пароль: mgpu2024",
+    "пароль": "🔑 Для сброса пароля обратитесь в IT-отдел (каб. 202)."
+}
 
-async def handle_user_message(message: Message, bot: Bot):
-    """
-    Handles incoming text messages from Telegram users.
+# Машина состояний
+class SupportState(StatesGroup):
+    waiting_category = State()
+    waiting_question = State()
 
-    If the message is from the admin, it is currently ignored unless it's a command.
-    For regular users, it checks for an existing open ticket.
-    - If an open ticket exists, the message is appended to it and the admin is notified.
-    - If no open ticket exists, a new one is created with the message content, and the admin is notified.
+# --- КЛАВИАТУРЫ ---
+def get_main_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎓 Учеба / Экзамены", callback_data="cat_study")],
+        [InlineKeyboardButton(text="📄 Справки / Документы", callback_data="cat_docs")],
+        [InlineKeyboardButton(text="💻 IT / Личный кабинет", callback_data="cat_it")],
+        [InlineKeyboardButton(text="🏠 Общежитие / Быт", callback_data="cat_dorm")],
+        [InlineKeyboardButton(text="🔍 Частые вопросы (FAQ)", callback_data="show_faq")]
+    ])
 
-    Args:
-        message (Message): The incoming Telegram message.
-        bot (Bot): The Telegram bot instance.
-    """
-    if message.from_user.id == settings.TG_ADMIN_ID:
-        # Admin sent a message without command? Ignore or handle differently.
-        # For now, assume admin only uses commands or replies.
-        # If admin replies to a forwarded message, we might want to handle it,
-        # but the requirement says `/reply {ticket_id} {text}`.
-        return
+# --- ХЕНДЛЕРЫ ---
 
-    async for session in get_session():
-        user = await get_or_create_user(
-            session,
-            external_id=message.from_user.id,
-            source=SourceType.TELEGRAM,
-            username=message.from_user.username,
-            full_name=message.from_user.full_name
+@router.message(Command("start"))
+async def start_cmd(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        f"Привет, {message.from_user.first_name}! 👋\n"
+        "Я бот поддержки департамента. Выберите тему вопроса:",
+        reply_markup=get_main_kb()
+    )
+
+@router.callback_query(F.data == "show_faq")
+async def show_faq_list(callback: types.CallbackQuery):
+    text = "<b>📚 Частые вопросы:</b>\n\n"
+    for k, v in FAQ_DB.items():
+        text += f"❓ <i>...{k}...</i>\n👉 {v}\n\n"
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cat_"))
+async def category_selected(callback: types.CallbackQuery, state: FSMContext):
+    category_map = {
+        "cat_study": "Учеба", "cat_docs": "Документы",
+        "cat_it": "IT", "cat_dorm": "Общежитие"
+    }
+    category = category_map.get(callback.data, "Общее")
+    
+    await state.update_data(category=category)
+    await state.set_state(SupportState.waiting_question)
+    
+    await callback.message.edit_text(f"Выбрана тема: <b>{category}</b>.\n✍️ Напишите ваш вопрос одним сообщением:", parse_mode="HTML")
+
+@router.message(SupportState.waiting_question)
+async def process_question(message: types.Message, state: FSMContext, bot: Bot):
+    text = message.text.lower()
+    
+    # 1. Проверка FAQ перед созданием тикета
+    for key, answer in FAQ_DB.items():
+        if key in text:
+            await message.answer(f"🤖 <b>Авто-ответ:</b>\n{answer}\n\nЕсли это не помогло, напишите вопрос еще раз, переформулировав его.", parse_mode="HTML")
+            return # Не создаем тикет
+
+    # 2. Создание тикета
+    data = await state.get_data()
+    category = data.get("category", "Общее")
+    
+    async with new_session() as session:
+        ticket = await create_ticket(
+            session, 
+            message.from_user.id, 
+            "tg", 
+            message.text, 
+            bot,
+            category=category
         )
+        
+    await message.answer(f"✅ <b>Заявка #{ticket.id} принята!</b>\nКатегория: {category}\nМы ответим в ближайшее время.", parse_mode="HTML")
+    await state.clear()
 
-        ticket = await get_open_ticket(session, user.id)
-
-        if ticket:
-            await add_message_to_ticket(session, ticket.id, message.text, SenderRole.USER)
-            await message.answer("Message added to your open ticket.")
-            # Notify admin about new message in existing ticket?
-            # Requirement: "Append the incoming message to the existing ticket"
-            # It doesn't explicitly say notify admin again, but usually support systems do.
-            # I'll notify admin for context.
-            await bot.send_message(
-                settings.TG_ADMIN_ID,
-                f"New message in Ticket #{ticket.id} from User {user.id} ({user.full_name}):\n{message.text}"
-            )
-        else:
-            ticket = await create_ticket(session, user.id, SourceType.TELEGRAM, message.text)
-            await message.answer(f"Ticket #{ticket.id} created. Support will reply soon.")
-            await bot.send_message(
-                settings.TG_ADMIN_ID,
-                f"New Ticket #{ticket.id} created by User {user.id} ({user.full_name}):\n{message.text}"
-            )
-
-async def handle_admin_reply(message: Message, bot: Bot):
-    """
-    Handles the admin's reply command `/reply {ticket_id} {text}`.
-
-    This function:
-    1. Parses the command to extract the ticket ID and reply text.
-    2. Retrieves the ticket from the database.
-    3. Saves the admin's reply as a message in the ticket history.
-    4. Routes the reply to the correct platform (Telegram or VK) based on the ticket's source.
-
-    Args:
-        message (Message): The incoming command message from the admin.
-        bot (Bot): The Telegram bot instance.
-    """
+# --- АДМИНКА ---
+@router.message(Command("reply"))
+async def admin_reply(message: types.Message, bot: Bot):
     if message.from_user.id != settings.TG_ADMIN_ID:
         return
 
-    # Format: /reply {ticket_id} {text}
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer("Usage: /reply {ticket_id} {text}")
-        return
-
     try:
-        ticket_id = int(parts[1])
-        reply_text = parts[2]
-    except ValueError:
-        await message.answer("Invalid ticket ID.")
-        return
-
-    async for session in get_session():
-        ticket = await get_ticket_by_id(session, ticket_id)
-        if not ticket:
-            await message.answer("Ticket not found.")
-            return
-
-        await add_message_to_ticket(session, ticket.id, reply_text, SenderRole.ADMIN)
-
-        # Route response
-        if ticket.source == SourceType.TELEGRAM:
-            try:
-                await bot.send_message(ticket.user.external_id, f"Support Reply:\n{reply_text}")
-                await message.answer(f"Reply sent to TG user {ticket.user.external_id}.")
-
-                # Close the ticket as per requirement
-                await close_ticket(session, ticket.id)
-                await message.answer(f"Ticket #{ticket.id} closed.")
-            except Exception as e:
-                logger.error(f"Failed to send to TG user: {e}")
-                await message.answer(f"Failed to send to TG user: {e}")
-        else:
-            await message.answer(f"Unsupported source type: {ticket.source}")
-
-def register_handlers(dp: Dispatcher):
-    """
-    Registers Telegram message handlers with the dispatcher.
-    """
-    dp.message.register(handle_start, Command("start"))
-    dp.message.register(handle_admin_reply, Command("reply"))
-    dp.message.register(handle_user_message, F.text)
+        args = message.text.split(" ", 2)
+        ticket_id = int(args[1])
+        answer_text = args[2]
+        
+        async with new_session() as session:
+            ticket = await session.get(Ticket, ticket_id)
+            if ticket:
+                # Отправляем ответ студенту
+                await bot.send_message(ticket.user_id, f"🔔 <b>Ответ на заявку #{ticket.id}:</b>\n\n{answer_text}", parse_mode="HTML")
+                ticket.status = "closed" # Закрываем тикет
+                await session.commit()
+                await message.answer(f"Ответ отправлен. Тикет #{ticket_id} закрыт.")
+            else:
+                await message.answer("Тикет не найден.")
+    except Exception as e:
+        await message.answer(f"Ошибка: /reply ID ТЕКСТ ({e})")
