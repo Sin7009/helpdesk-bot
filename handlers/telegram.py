@@ -1,3 +1,4 @@
+import re
 from aiogram import Router, F, Bot, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -116,3 +117,52 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
     
     await message.answer(f"✅ <b>Заявка #{t.id} создана!</b>", parse_mode="HTML")
     await state.clear()
+
+    # --- АДМИНКА ---
+
+# Вариант 1: Нативный ответ (Reply) на сообщение бота
+@router.message(F.reply_to_message & (F.from_user.id == settings.TG_ADMIN_ID))
+async def admin_reply_native(message: types.Message, bot: Bot):
+    # Пытаемся найти "#123" в тексте сообщения, на которое отвечаем
+    origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    match = re.search(r"#(\d+)", origin_text)
+    
+    if not match:
+        await message.answer("⚠️ Я не вижу ID тикета в сообщении, на которое вы ответили. Используйте /reply ID Текст")
+        return
+
+    ticket_id = int(match.group(1))
+    answer_text = message.text
+    
+    await process_admin_answer(message, bot, ticket_id, answer_text)
+
+# Вариант 2: Команда /reply ID Текст
+@router.message(Command("reply"))
+async def admin_reply_command(message: types.Message, bot: Bot):
+    if message.from_user.id != settings.TG_ADMIN_ID: return
+    try:
+        args = message.text.split(" ", 2)
+        ticket_id = int(args[1])
+        answer_text = args[2]
+        await process_admin_answer(message, bot, ticket_id, answer_text)
+    except:
+        await message.answer("⚠️ Формат: `/reply ID Текст` или просто ответьте на сообщение.")
+
+# Общая функция отправки (чтобы не дублировать код)
+async def process_admin_answer(message: types.Message, bot: Bot, ticket_id: int, text: str):
+    async with new_session() as session:
+        ticket = await session.get(Ticket, ticket_id)
+        if ticket:
+            try:
+                await bot.send_message(
+                    ticket.user_id, 
+                    f"👨‍💼 <b>Ответ оператора:</b>\n\n{text}", 
+                    parse_mode="HTML"
+                )
+                ticket.status = TicketStatus.CLOSED
+                await session.commit()
+                await message.answer(f"✅ Ответ ушел. Тикет #{ticket_id} закрыт.")
+            except Exception as e:
+                await message.answer(f"❌ Не удалось отправить: {e}")
+        else:
+            await message.answer("❌ Тикет не найден в базе.")
