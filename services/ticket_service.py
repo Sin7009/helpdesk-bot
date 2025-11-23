@@ -104,12 +104,24 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         date_str = datetime.datetime.now().strftime("%Y%m%d")
         ticket_number = f"{date_str}-{daily_id}"
 
-        admin_text = (
-            f"🔔 <b>Новый запрос №{ticket_number}</b> от <a href='tg://user?id={user_id}'>{user_full_name}</a>\n"
-            f"Тема: {category.name}\n\n"
-            f"📜 <b>История:</b>\n{history_text}\n"
-            f"💬 <b>Сообщение:</b>\n{text}"
-        )
+        # Уведомление админа с кнопкой
+        if is_new:
+            try:
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_{active_ticket.id}")]
+                ])
+
+                admin_text = (
+                    f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
+                    f"От: <a href='tg://user?id={user_id}'>Пользователь</a>\n"
+                    f"Тема: {category}\n"
+                    f"Текст: {text}\n\n"
+                    f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
+                )
+                await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+            except Exception as e:
+                logger.error(f"⚠️ Не удалось отправить уведомление админу: {e}")
 
         # Add Close button
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -149,13 +161,25 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         ticket_date_str = ticket.created_at.strftime("%Y%m%d")
         ticket_number = f"{ticket_date_str}-{ticket.daily_id}"
 
-        admin_text = (
-            f"📨 <b>Новое сообщение в заявке №{ticket_number}</b>\n"
-            f"От: {user.full_name}\n"
-            f"Тема: {category.name if category else 'Unknown'}\n\n"
-            f"{text}\n\n"
-            f"Ответить: <code>/reply {ticket.id} текст</code>"
-        )
+        # Уведомление админа с кнопкой
+        if is_new:
+            try:
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_{active_ticket.id}")]
+                ])
+
+                admin_text = (
+                    f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
+                    f"От: <a href='tg://user?id={user_id}'>Пользователь</a>\n"
+                    f"Тема: {category}\n"
+                    f"Текст: {text}\n\n"
+                    f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
+                )
+                await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+            except Exception as e:
+                logger.error(f"⚠️ Не удалось отправить уведомление админу: {e}")
+                
         await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"⚠️ Failed to notify admin about new message: {e}")
