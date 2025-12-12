@@ -101,31 +101,20 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
 
     # 7. Notify Admin
     try:
-        date_str = datetime.datetime.now().strftime("%Y%m%d")
-        ticket_number = f"{date_str}-{daily_id}"
-
-        # Уведомление админа с кнопкой
-        if is_new:
-            try:
-                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_{active_ticket.id}")]
-                ])
-
-                admin_text = (
-                    f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
-                    f"От: <a href='tg://user?id={user_id}'>Пользователь</a>\n"
-                    f"Тема: {category}\n"
-                    f"Текст: {text}\n\n"
-                    f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
-                )
-                await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
-            except Exception as e:
-                logger.error(f"⚠️ Не удалось отправить уведомление админу: {e}")
+        # Create notification text
+        category_text = category.name if category else "General"
+        admin_text = (
+            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
+            f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
+            f"Тема: {category_text}\n"
+            f"Текст: {text}\n\n"
+            f"<i>История:</i>\n{history_text}\n\n"
+            f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
+        )
 
         # Add Close button
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
+            [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
         ])
 
         await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
@@ -144,42 +133,22 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
     try:
         user = ticket.user
         category = ticket.category
-        today = datetime.datetime.now()
-        date_str = today.strftime("%Y%m%d")
-        # To reconstruct daily_id accurately for display we rely on stored daily_id.
-        # But wait, create_ticket sets daily_id. But if we restart bot, we read it from DB.
-        # However, the requirement says "Format should be displayed as YYYYMMDD-{daily_id}".
-        # daily_id is stored in Ticket.
-
-        # Check if created today? daily_id is just an integer.
-        # The prompt says "daily_id (integer, reset every day)".
-        # And "Format should be displayed as YYYYMMDD-{daily_id}".
-        # Assuming the daily_id stored in ticket is the N for that day.
-        # So we need the date of creation to form the full ID? Or just today's date?
-        # Usually ID stays same. So use ticket.created_at.
 
         ticket_date_str = ticket.created_at.strftime("%Y%m%d")
         ticket_number = f"{ticket_date_str}-{ticket.daily_id}"
 
-        # Уведомление админа с кнопкой
-        if is_new:
-            try:
-                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_{active_ticket.id}")]
-                ])
+        admin_text = (
+            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b>\n"
+            f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
+            f"Тема: {category.name if category else 'General'}\n"
+            f"Текст: {text}\n\n"
+            f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
+        )
 
-                admin_text = (
-                    f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
-                    f"От: <a href='tg://user?id={user_id}'>Пользователь</a>\n"
-                    f"Тема: {category}\n"
-                    f"Текст: {text}\n\n"
-                    f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
-                )
-                await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
-            except Exception as e:
-                logger.error(f"⚠️ Не удалось отправить уведомление админу: {e}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
+        ])
                 
-        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML")
+        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify admin about new message: {e}")
