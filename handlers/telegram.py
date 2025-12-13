@@ -6,9 +6,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.setup import new_session
-from services.ticket_service import create_ticket
-from database.models import Ticket, TicketStatus, User, FAQ, SourceType
+# --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
+from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
+from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category
 
 from core.config import settings
 
@@ -18,9 +18,8 @@ class TicketForm(StatesGroup):
     waiting_text = State()
 
 # --- КЛАВИАТУРЫ ---
+# (Оставляем пока хардкод для надежности, раз вы его вернули)
 def get_menu_kb():
-    # В идеале кнопки тоже брать из БД (таблица Categories), но пока оставим хардкод для старта
-    # Или можно сделать select(Category) если таблица заполнена
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎓 Учеба", callback_data="cat_study"),
          InlineKeyboardButton(text="📄 Справки", callback_data="cat_docs")],
@@ -45,11 +44,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
 
 @router.callback_query(F.data == "show_faq")
-async def show_faq(callback: types.CallbackQuery):
-    async with new_session() as session:
-        stmt = select(FAQ).order_by(FAQ.trigger_word)
-        result = await session.execute(stmt)
-        faqs = result.scalars().all()
+async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
+    # Используем session из Middleware (аргумент)
+    stmt = select(FAQ).order_by(FAQ.trigger_word)
+    result = await session.execute(stmt)
+    faqs = result.scalars().all()
 
     if faqs:
         text = "\n".join([f"🔹 {f.trigger_word}: {f.answer_text}" for f in faqs])
@@ -69,75 +68,74 @@ async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("cat_"))
 async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
-    # Добавь в начало select_cat
+    # 1. Проверка активного тикета
     active_ticket = await get_active_ticket(session, callback.from_user.id, SourceType.TELEGRAM)
     if active_ticket:
         await callback.answer("⚠️ У вас уже есть открытый диалог. Дождитесь ответа или закройте его.", show_alert=True)
         return
 
-    # Determine category name from callback data
-    cat_data = callback.data
-    category_name = "Общее"
+    # 2. Определение категории
+    cat_map = {
+        "cat_study": "Учеба",
+        "cat_docs": "Справки",
+        "cat_it": "IT",
+        "cat_dorm": "Общежитие"
+    }
+    # Исправлено: получаем имя категории из словаря или берем хвост строки
+    category_name = cat_map.get(callback.data, "Общее")
     
-    await state.update_data(category=category)
+    # Исправлено: используем category_name, а не несуществующую category
+    await state.update_data(category=category_name)
     await state.set_state(TicketForm.waiting_text)
+
     await callback.message.edit_text(
-        f"Тема: <b>{category}</b>.\n✍️ Напишите ваш вопрос:",
+        f"Тема: <b>{category_name}</b>.\n✍️ Напишите ваш вопрос:",
         parse_mode="HTML",
         reply_markup=get_back_kb()
     )
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
-    if message.from_user.id == settings.TG_ADMIN_ID and message.reply_to_message:
+async def handle_text(message: types.Message, state: FSMContext, bot: Bot, session: AsyncSession):
+    # 1. Игнорируем сообщения в чате сотрудников
+    if message.chat.id == settings.TG_STAFF_CHAT_ID:
         return
-    async with new_session() as session:
-        # 1. Проверка FAQ
-        stmt = select(FAQ)
-        result = await session.execute(stmt)
-        faqs = result.scalars().all()
 
-        for faq in faqs:
-             if faq.trigger_word.lower() in message.text.lower():
+    # 2. Проверка FAQ
+    stmt = select(FAQ)
+    result = await session.execute(stmt)
+    faqs = result.scalars().all()
+
+    for faq in faqs:
+            if faq.trigger_word.lower() in message.text.lower():
                 await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
                 return
 
-        # 2. Проверка состояния
-        current_state = await state.get_state()
+    # 3. Проверка на активный тикет (добавление сообщения)
+    active_ticket = await get_active_ticket(session, message.from_user.id, SourceType.TELEGRAM)
 
-        # Если студент пишет "Привет" без выбора категории
-        if current_state != TicketForm.waiting_text:
-            # Проверяем активный тикет
-            result = await session.execute(select(User).where(User.external_id == message.from_user.id))
-            user = result.scalar_one_or_none()
+    if active_ticket:
+        # Если есть тикет — просто добавляем сообщение
+        await add_message_to_ticket(session, active_ticket, message.text, bot)
+        await message.answer("✅ Сообщение добавлено к диалогу.")
+        # Сбрасываем состояние, если вдруг оно зависло
+        await state.clear()
+        return
 
-            has_active_ticket = False
-            if user:
-                res_t = await session.execute(select(Ticket).where(
-                    Ticket.user_id == user.id,
-                    Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])
-                ))
-                if res_t.first():
-                    has_active_ticket = True
+    # 4. Если тикета нет — проверяем создание нового
+    current_state = await state.get_state()
 
-            if has_active_ticket:
-                # Добавляем в существующий
-                await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, "Existing")
-                await message.answer("✅ Сообщение добавлено к диалогу.")
-                return
-            else:
-                # Тикета нет -> Меню
-                await message.answer(
-                    "Чтобы задать вопрос, выберите категорию:",
-                    reply_markup=get_menu_kb()
-                )
-                return
-
-        # 3. Создание нового тикета
+    if current_state == TicketForm.waiting_text:
+        # Создание нового тикета
         data = await state.get_data()
         category = data.get("category", "Общее")
 
-        t = await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, category)
+        t = await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, category, message.from_user.full_name)
+        await message.answer(f"✅ <b>Заявка #{t.daily_id} принята!</b>", parse_mode="HTML")
+        await state.clear()
+        return
 
-    await message.answer(f"✅ <b>Заявка #{t.daily_id} принята!</b>", parse_mode="HTML")
-    await state.clear()
+    # 5. Если студент пишет "Привет" без выбора меню
+    await message.answer(
+        "Чтобы задать вопрос, выберите категорию:",
+        reply_markup=get_menu_kb()
+    )

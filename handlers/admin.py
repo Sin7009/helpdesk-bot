@@ -3,8 +3,9 @@ from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from database.setup import new_session
 from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
-from services.faq_service import FAQService
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
 
