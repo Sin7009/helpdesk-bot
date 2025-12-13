@@ -4,7 +4,6 @@ class Settings(BaseSettings):
     # Имена переменных должны точно совпадать с тем, что в .env (капсом)
     TG_BOT_TOKEN: str
     TG_ADMIN_ID: int
-    TG_STAFF_CHAT_ID: int
     
     # Добавляем базу данных с дефолтным значением
     DB_NAME: str = "/app/data/support.db"
