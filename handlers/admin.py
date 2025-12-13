@@ -1,15 +1,16 @@
 import re
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from database.setup import new_session
-from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole
+from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
+from services.faq_service import FAQService
 from core.config import settings
 
 router = Router()
 
 # --- ПРОВЕРКА ПРАВ ---
-async def is_admin_or_mod(user_id: int, session) -> bool:
+async def is_admin_or_mod(user_id: int, session: AsyncSession) -> bool:
     if user_id == settings.TG_ADMIN_ID:
         return True
     stmt = select(User).where(User.external_id == user_id)
@@ -17,84 +18,133 @@ async def is_admin_or_mod(user_id: int, session) -> bool:
     user = result.scalar_one_or_none()
     return user and user.role in [UserRole.ADMIN, UserRole.MODERATOR]
 
-async def is_root_admin(user_id: int) -> bool:
-    return user_id == settings.TG_ADMIN_ID
-
 # --- УПРАВЛЕНИЕ (Модераторы / FAQ / Категории) ---
-# (Оставляем всё как было, сокращено для ясности)
 
 @router.message(Command("add_category"))
-async def add_category_cmd(message: types.Message, command: CommandObject):
-    async with new_session() as session:
-        if not await is_admin_or_mod(message.from_user.id, session): return
-        from database.models import Category
-        try:
-            name = command.args.strip()
-            session.add(Category(name=name))
+async def add_category_cmd(message: types.Message, command: CommandObject, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        name = command.args.strip()
+        session.add(Category(name=name))
+        await session.commit()
+        await message.answer(f"✅ Категория '{name}' добавлена.")
+    except Exception as e:
+        await message.answer(f"Ошибка: {e}")
+
+@router.message(Command("add_faq"))
+async def add_faq_cmd(message: types.Message, command: CommandObject, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        # Format: /add_faq trigger | answer
+        args = command.args.split("|", 1)
+        if len(args) != 2: raise ValueError
+        trigger, answer = args[0].strip(), args[1].strip()
+
+        session.add(FAQ(trigger_word=trigger, answer_text=answer))
+        await session.commit()
+        await FAQService.refresh(session) # Refresh Cache
+        await message.answer(f"✅ FAQ '{trigger}' добавлен.")
+    except Exception:
+        await message.answer("Формат: /add_faq Триггер | Ответ")
+
+@router.message(Command("del_faq"))
+async def del_faq_cmd(message: types.Message, command: CommandObject, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        trigger = command.args.strip()
+        stmt = select(FAQ).where(FAQ.trigger_word == trigger)
+        result = await session.execute(stmt)
+        faq = result.scalar_one_or_none()
+        if faq:
+            await session.delete(faq)
             await session.commit()
-            await message.answer(f"✅ Категория '{name}' добавлена.")
-        except Exception as e:
-            await message.answer(f"Ошибка: {e}")
+            await FAQService.refresh(session) # Refresh Cache
+            await message.answer(f"✅ FAQ '{trigger}' удален.")
+        else:
+            await message.answer("FAQ не найден.")
+    except Exception:
+         await message.answer("Формат: /del_faq Триггер")
+
+@router.message(Command("list_faq"))
+async def list_faq_cmd(message: types.Message, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    faqs = FAQService.get_cache()
+    if not faqs:
+        await message.answer("База пуста.")
+        return
+    text = "\n".join([f"- {f.trigger_word}" for f in faqs])
+    await message.answer(f"Список FAQ:\n{text}")
+
 
 # --- ОБРАБОТКА ОТВЕТОВ (Диалог) ---
 
 # 1. Ответ СВАЙПОМ (Native Reply)
 @router.message(F.reply_to_message)
-async def admin_reply_native(message: types.Message, bot: Bot):
-    async with new_session() as session:
-        # Проверяем права
-        if not await is_admin_or_mod(message.from_user.id, session): return
+async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSession):
+    # Проверяем права
+    if not await is_admin_or_mod(message.from_user.id, session): return
 
-        # Ищем ID тикета (#123) в тексте, на который ответили
-        origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        match = re.search(r"#(\d+)", origin_text)
-        
-        if not match:
-            # Если админ отвечает просто так, не на уведомление — игнорируем или пишем подсказку
-            return 
+    # Ищем ID тикета (#123) в тексте, на который ответили
+    # The notification text now contains "(ID: #123)"
+    origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
 
-        ticket_id = int(match.group(1))
-        answer_text = message.text
-        
-        await process_reply(bot, session, ticket_id, answer_text, message, close=False)
+    # Updated regex to match the new format OR the old format just in case
+    # Look for ID: #(\d+)
+    match = re.search(r"ID:\s*#(\d+)", origin_text)
+
+    # Fallback to just #(\d+) if specific format not found (though risky if other # exist, but okay for now)
+    if not match:
+         match = re.search(r"#(\d+)", origin_text)
+
+    if not match:
+        # Если админ отвечает просто так, не на уведомление — игнорируем или пишем подсказку
+        return
+
+    ticket_id = int(match.group(1))
+    answer_text = message.text
+
+    await process_reply(bot, session, ticket_id, answer_text, message, close=False)
 
 # 2. Команда /reply ID Текст
 @router.message(Command("reply"))
-async def admin_reply_command(message: types.Message, command: CommandObject, bot: Bot):
-    async with new_session() as session:
-        if not await is_admin_or_mod(message.from_user.id, session): return
-        try:
-            t_id, text = command.args.split(" ", 1)
-            await process_reply(bot, session, int(t_id), text, message, close=False)
-        except:
-            await message.answer("Формат: /reply ID Текст")
+async def admin_reply_command(message: types.Message, command: CommandObject, bot: Bot, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        t_id, text = command.args.split(" ", 1)
+        await process_reply(bot, session, int(t_id), text, message, close=False)
+    except:
+        await message.answer("Формат: /reply ID Текст")
 
 # 3. Команда /close ID (Закрыть тикет принудительно)
 @router.message(Command("close"))
-async def admin_close_ticket(message: types.Message, command: CommandObject, bot: Bot):
-    async with new_session() as session:
-        if not await is_admin_or_mod(message.from_user.id, session): return
-        try:
-            t_id = int(command.args.strip())
-            ticket = await session.get(Ticket, t_id)
-            if ticket and ticket.status != TicketStatus.CLOSED:
-                ticket.status = TicketStatus.CLOSED
-                ticket.closed_at = func.now()
-                await session.commit()
+async def admin_close_ticket(message: types.Message, command: CommandObject, bot: Bot, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        t_id = int(command.args.strip())
+        ticket = await session.get(Ticket, t_id)
+        if ticket and ticket.status != TicketStatus.CLOSED:
+            ticket.status = TicketStatus.CLOSED
+            ticket.closed_at = func.now()
+            await session.commit()
+
+            # Try notify user
+            try:
                 await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
-                await message.answer(f"Тикет #{t_id} закрыт.")
-            else:
-                await message.answer("Тикет не найден или уже закрыт.")
-        except:
-            await message.answer("Формат: /close ID")
+            except: pass
+
+            await message.answer(f"Тикет #{t_id} закрыт.")
+        else:
+            await message.answer("Тикет не найден или уже закрыт.")
+    except:
+        await message.answer("Формат: /close ID")
             
 @router.callback_query(F.data.startswith("close_"))
-async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
-    async with new_session() as session:
-        if not await is_admin_or_mod(callback.from_user.id, session):
-            await callback.answer("У вас нет прав.", show_alert=True)
-            return
+async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot, session: AsyncSession):
+    if not await is_admin_or_mod(callback.from_user.id, session):
+        await callback.answer("У вас нет прав.", show_alert=True)
+        return
 
+    try:
         t_id = int(callback.data.split("_")[1])
         ticket = await session.get(Ticket, t_id)
         
@@ -105,12 +155,16 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             
             # Уведомляем студента
             try:
+                # Need to find the user via ticket.user (relationship)
+                # Ensure eager load or just access it (lazy load might fail if session closed, but we are in middleware session)
                 await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
             except: pass
             
             await callback.message.edit_text(f"{callback.message.text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
         else:
             await callback.answer("Тикет уже закрыт или не найден.")
+    except Exception as e:
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 # --- ЛОГИКА ОТПРАВКИ ---
 async def process_reply(bot, session, ticket_id, text, message, close=False):
@@ -118,7 +172,31 @@ async def process_reply(bot, session, ticket_id, text, message, close=False):
     if ticket:
         # Отправляем студенту
         try:
-            await bot.send_message(ticket.user_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
+            # We need the user object.
+            # If relationship is not loaded, we might need to fetch it.
+            # Assuming lazy loading works within the active session.
+            # However, ticket.user_id is available.
+
+            # Fetch user explicitly if needed or rely on relationship.
+            # ticket.user is defined in models.
+            user = ticket.user
+            # But wait, ticket might not have user loaded if obtained via get().
+            # Although standard asyncio sqlalchemy with lazy='selectin' or explicit loading is safer.
+            # In models.py: user: Mapped["User"] = relationship(back_populates="tickets")
+            # Default loading is lazy='select', which fails in asyncio if not awaited or strictly managed.
+            # But ticket.user_id is an int, we can use that to send message?
+            # Yes, bot.send_message takes chat_id.
+            # User model has 'external_id' which is the TG ID. We need that!
+            # ticket.user_id is the DB PK.
+
+            # So we MUST fetch the user to get external_id.
+            if not user:
+                 # Fetch user manually
+                 user_stmt = select(User).where(User.id == ticket.user_id)
+                 user_res = await session.execute(user_stmt)
+                 user = user_res.scalar_one()
+
+            await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
             
             # Сохраняем ответ Админа в историю переписки
             msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
