@@ -1,5 +1,6 @@
 import logging
 import datetime
+import html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
@@ -91,7 +92,9 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         if h.id == active_ticket.id: continue # Skip current
         date_str = h.created_at.strftime("%d.%m.%Y")
         summary = h.summary or h.question_text[:30] + "..." if h.question_text else "No text"
-        history_text += f"- {date_str}: {summary}\n"
+        # Sanitize summary to prevent injection from history
+        safe_summary = html.escape(summary)
+        history_text += f"- {date_str}: {safe_summary}\n"
 
     if not history_text:
         history_text = "Нет предыдущих обращений"
@@ -103,11 +106,15 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
     try:
         # Create notification text
         category_text = category.name if category else "General"
+        safe_category_text = html.escape(category_text)
+        safe_user_name = html.escape(user.full_name or 'Пользователь')
+        safe_text = html.escape(text)
+
         admin_text = (
             f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
-            f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
-            f"Тема: {category_text}\n"
-            f"Текст: {text}\n\n"
+            f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
+            f"Тема: {safe_category_text}\n"
+            f"Текст: {safe_text}\n\n"
             f"<i>История:</i>\n{history_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
         )
@@ -134,14 +141,20 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         user = ticket.user
         category = ticket.category
 
+        # Sanitize inputs
+        safe_user_name = html.escape(user.full_name or 'Пользователь')
+        category_name = category.name if category else 'General'
+        safe_category_name = html.escape(category_name)
+        safe_text = html.escape(text)
+
         ticket_date_str = ticket.created_at.strftime("%Y%m%d")
         ticket_number = f"{ticket_date_str}-{ticket.daily_id}"
 
         admin_text = (
             f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b>\n"
-            f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
-            f"Тема: {category.name if category else 'General'}\n"
-            f"Текст: {text}\n\n"
+            f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
+            f"Тема: {safe_category_name}\n"
+            f"Текст: {safe_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
         )
 

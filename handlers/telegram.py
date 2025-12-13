@@ -1,3 +1,4 @@
+import html
 from aiogram import Router, F, Bot, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -46,7 +47,8 @@ async def show_faq(callback: types.CallbackQuery):
         faqs = result.scalars().all()
 
     if faqs:
-        text = "\n".join([f"🔹 {f.trigger_word}: {f.answer_text}" for f in faqs])
+        # Escape trigger word and answer text to prevent HTML injection if DB contains unsafe content
+        text = "\n".join([f"🔹 {html.escape(f.trigger_word)}: {f.answer_text}" for f in faqs])
     else:
         text = "База знаний пока пуста."
 
@@ -65,7 +67,9 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext):
     
     await state.update_data(category=category)
     await state.set_state(TicketForm.waiting_text)
-    await callback.message.edit_text(f"Тема: <b>{category}</b>.\n✍️ Напишите ваш вопрос:", parse_mode="HTML")
+    # category comes from safe internal mapping, but good practice to escape if it ever changes source
+    safe_category = html.escape(category)
+    await callback.message.edit_text(f"Тема: <b>{safe_category}</b>.\n✍️ Напишите ваш вопрос:", parse_mode="HTML")
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message, state: FSMContext, bot: Bot):
