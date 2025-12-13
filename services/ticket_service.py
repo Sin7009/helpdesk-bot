@@ -104,7 +104,7 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         # Create notification text
         category_text = category.name if category else "General"
         admin_text = (
-            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
+            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> (ID: #{active_ticket.id})\n"
             f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category_text}\n"
             f"Текст: {text}\n\n"
@@ -117,9 +117,9 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
         ])
 
-        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+        await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        logger.error(f"⚠️ Failed to notify admin: {e}")
+        logger.error(f"⚠️ Failed to notify staff: {e}")
 
     return active_ticket
 
@@ -134,11 +134,8 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         user = ticket.user
         category = ticket.category
 
-        ticket_date_str = ticket.created_at.strftime("%Y%m%d")
-        ticket_number = f"{ticket_date_str}-{ticket.daily_id}"
-
         admin_text = (
-            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b>\n"
+            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> (ID: #{ticket.id})\n"
             f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category.name if category else 'General'}\n"
             f"Текст: {text}\n\n"
@@ -149,6 +146,6 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
         ])
                 
-        await bot.send_message(settings.TG_ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+        await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        logger.error(f"⚠️ Failed to notify admin about new message: {e}")
+        logger.error(f"⚠️ Failed to notify staff about new message: {e}")
