@@ -56,16 +56,16 @@ class Ticket(Base):
     # daily_id: Integer, reset every day. Needs logic to handle this, likely not auto-increment in DB but calculated in code.
     daily_id: Mapped[int] = mapped_column(Integer, default=0)
 
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
 
     source: Mapped[SourceType] = mapped_column(String(10))
     question_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    status: Mapped[TicketStatus] = mapped_column(String(20), default=TicketStatus.NEW)
+    status: Mapped[TicketStatus] = mapped_column(String(20), default=TicketStatus.NEW, index=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
     closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
