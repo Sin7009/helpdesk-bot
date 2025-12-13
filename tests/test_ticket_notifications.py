@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from services.ticket_service import add_message_to_ticket, create_ticket
 from database.models import Ticket, User, Category, TicketStatus
 import datetime
@@ -8,6 +8,7 @@ import datetime
 async def test_add_message_to_ticket_notifies_admin():
     # Mock dependencies
     session = AsyncMock()
+    session.add = MagicMock() # Fix warning
     bot = AsyncMock()
 
     # Setup Ticket with necessary relationships
