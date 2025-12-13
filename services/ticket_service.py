@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
 from core.config import settings
+from core.constants import format_ticket_id
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -111,8 +112,8 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         safe_text = html.escape(text)
 
         admin_text = (
-            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b>\n"
-            f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
+            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
+            f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category_text}\n"
             f"Текст: {safe_text}\n\n"
             f"<i>История:</i>\n{history_text}\n\n"
@@ -146,8 +147,8 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         safe_text = html.escape(text)
 
         admin_text = (
-            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b>\n"
-            f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
+            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
+            f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category.name if category else 'General'}\n"
             f"Текст: {safe_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"

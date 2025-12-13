@@ -67,14 +67,16 @@ async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
     )
 
 @router.callback_query(F.data.startswith("cat_"))
-async def select_cat(callback: types.CallbackQuery, state: FSMContext):
-    cat_map = {
-        "cat_study": "Учеба",
-        "cat_docs": "Справки",
-        "cat_it": "IT",
-        "cat_dorm": "Общежитие"
-    }
-    category = cat_map.get(callback.data, "Общее")
+async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    # Добавь в начало select_cat
+    active_ticket = await get_active_ticket(session, callback.from_user.id, SourceType.TELEGRAM)
+    if active_ticket:
+        await callback.answer("⚠️ У вас уже есть открытый диалог. Дождитесь ответа или закройте его.", show_alert=True)
+        return
+
+    # Determine category name from callback data
+    cat_data = callback.data
+    category_name = "Общее"
     
     await state.update_data(category=category)
     await state.set_state(TicketForm.waiting_text)

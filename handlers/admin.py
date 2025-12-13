@@ -2,9 +2,11 @@ import re
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, func
-from database.setup import new_session
-from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole
+from sqlalchemy.orm import selectinload
+from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
+from services.faq_service import FAQService
 from core.config import settings
+from core.constants import TICKET_ID_PATTERN
 
 router = Router()
 
@@ -40,14 +42,21 @@ async def add_category_cmd(message: types.Message, command: CommandObject):
 
 # 1. Ответ СВАЙПОМ (Native Reply)
 @router.message(F.reply_to_message)
-async def admin_reply_native(message: types.Message, bot: Bot):
-    async with new_session() as session:
-        # Проверяем права
-        if not await is_admin_or_mod(message.from_user.id, session): return
+async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSession):
+    # Проверяем права
+    if not await is_admin_or_mod(message.from_user.id, session): return
 
-        # Ищем ID тикета (#123) в тексте, на который ответили
-        origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        match = re.search(r"#(\d+)", origin_text)
+    # Проверка, что отвечаем боту
+    bot_obj = await bot.get_me()
+    if message.reply_to_message.from_user.id != bot_obj.id:
+        return
+
+    # Ищем ID тикета (#123) в тексте, на который ответили
+    # The notification text now contains "(ID: #123)"
+    origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+    # Updated regex to match the new format OR the old format just in case
+    match = re.search(TICKET_ID_PATTERN, origin_text)
 
         if not match:
             # Если админ отвечает просто так, не на уведомление — игнорируем или пишем подсказку
@@ -71,22 +80,30 @@ async def admin_reply_command(message: types.Message, command: CommandObject, bo
 
 # 3. Команда /close ID (Закрыть тикет принудительно)
 @router.message(Command("close"))
-async def admin_close_ticket(message: types.Message, command: CommandObject, bot: Bot):
-    async with new_session() as session:
-        if not await is_admin_or_mod(message.from_user.id, session): return
-        try:
-            t_id = int(command.args.strip())
-            ticket = await session.get(Ticket, t_id)
-            if ticket and ticket.status != TicketStatus.CLOSED:
-                ticket.status = TicketStatus.CLOSED
-                ticket.closed_at = func.now()
-                await session.commit()
-                await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
-                await message.answer(f"Тикет #{t_id} закрыт.")
-            else:
-                await message.answer("Тикет не найден или уже закрыт.")
-        except:
-            await message.answer("Формат: /close ID")
+async def admin_close_ticket(message: types.Message, command: CommandObject, bot: Bot, session: AsyncSession):
+    if not await is_admin_or_mod(message.from_user.id, session): return
+    try:
+        t_id = int(command.args.strip())
+        # Use selectinload to fetch user eagerly for notification
+        stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == t_id)
+        result = await session.execute(stmt)
+        ticket = result.scalar_one_or_none()
+
+        if ticket and ticket.status != TicketStatus.CLOSED:
+            ticket.status = TicketStatus.CLOSED
+            ticket.closed_at = func.now()
+            await session.commit()
+
+            # Try notify user
+            try:
+                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
+            except: pass
+
+            await message.answer(f"Тикет #{t_id} закрыт.")
+        else:
+            await message.answer("Тикет не найден или уже закрыт.")
+    except:
+        await message.answer("Формат: /close ID")
             
 @router.callback_query(F.data.startswith("close_"))
 async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
@@ -96,7 +113,10 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             return
 
         t_id = int(callback.data.split("_")[1])
-        ticket = await session.get(Ticket, t_id)
+        # Use selectinload to fetch user eagerly for notification
+        stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == t_id)
+        result = await session.execute(stmt)
+        ticket = result.scalar_one_or_none()
         
         if ticket and ticket.status != TicketStatus.CLOSED:
             ticket.status = TicketStatus.CLOSED
@@ -105,7 +125,7 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             
             # Уведомляем студента
             try:
-                await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
+                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
             except: pass
             
             await callback.message.edit_text(f"{callback.message.text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
@@ -114,11 +134,16 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
 
 # --- ЛОГИКА ОТПРАВКИ ---
 async def process_reply(bot, session, ticket_id, text, message, close=False):
-    ticket = await session.get(Ticket, ticket_id)
+    # Используем stmt вместо get, чтобы подгрузить User сразу
+    stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+
     if ticket:
+        user = ticket.user # Теперь это безопасно, данные уже в памяти
         # Отправляем студенту
         try:
-            await bot.send_message(ticket.user_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
+            await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
             
             # Сохраняем ответ Админа в историю переписки
             msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
