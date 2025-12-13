@@ -106,13 +106,13 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
     # Commit DB changes
     await session.commit()
 
-    # 7. Notify Admin
+    # 7. Notify Staff/Admin
     try:
         # Create notification text
         category_text = category.name if category else "General"
         admin_text = (
-            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> (ID: #{active_ticket.id})\n"
-            f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
+            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
+            f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
             f"Тема: {category_text}\n"
             f"Текст: {text}\n\n"
             f"<i>История:</i>\n{history_text}\n\n"
@@ -124,6 +124,7 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
         ])
 
+        # Notify staff chat
         await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff: {e}")
@@ -136,15 +137,15 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
     session.add(msg)
     await session.commit()
 
-    # Notify Admin
+    # Notify Staff/Admin
     try:
         # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
         user = ticket.user
         category = ticket.category
 
         admin_text = (
-            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> (ID: #{ticket.id})\n"
-            f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
+            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
+            f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
             f"Тема: {category.name if category else 'General'}\n"
             f"Текст: {text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
@@ -154,6 +155,7 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
             [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
         ])
                 
+        # Notify staff chat
         await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff about new message: {e}")

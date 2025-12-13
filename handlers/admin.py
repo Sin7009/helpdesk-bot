@@ -32,6 +32,9 @@ async def add_category_cmd(message: types.Message, command: CommandObject):
         if not await is_admin_or_mod(message.from_user.id, session): return
         from database.models import Category
         try:
+            if not command.args:
+                 await message.answer("Ошибка: введите название категории")
+                 return
             name = command.args.strip()
             session.add(Category(name=name))
             await session.commit()
@@ -76,16 +79,25 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
 async def admin_reply_command(message: types.Message, command: CommandObject, bot: Bot):
     async with new_session() as session:
         if not await is_admin_or_mod(message.from_user.id, session): return
+        if not command.args:
+             await message.answer("Формат: /reply ID Текст")
+             return
         try:
             t_id, text = command.args.split(" ", 1)
             await process_reply(bot, session, int(t_id), text, message, close=False)
-        except:
+        except ValueError:
             await message.answer("Формат: /reply ID Текст")
+        except Exception as e:
+             await message.answer(f"Ошибка: {e}")
+
 
 # 3. Команда /close ID (Закрыть тикет принудительно)
 @router.message(Command("close"))
 async def admin_close_ticket(message: types.Message, command: CommandObject, bot: Bot, session: AsyncSession):
     if not await is_admin_or_mod(message.from_user.id, session): return
+    if not command.args:
+        await message.answer("Формат: /close ID")
+        return
     try:
         t_id = int(command.args.strip())
         # Use selectinload to fetch user eagerly for notification
@@ -106,7 +118,7 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
             await message.answer(f"Тикет #{t_id} закрыт.")
         else:
             await message.answer("Тикет не найден или уже закрыт.")
-    except:
+    except ValueError:
         await message.answer("Формат: /close ID")
             
 @router.callback_query(F.data.startswith("close_"))
