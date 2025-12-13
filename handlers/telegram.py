@@ -47,6 +47,11 @@ async def get_menu_kb(session: AsyncSession):
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+def get_back_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+    ])
+
 # --- ХЕНДЛЕРЫ ---
 
 @router.message(Command("start"))
@@ -69,6 +74,14 @@ async def show_faq(callback: types.CallbackQuery):
 
     await callback.message.answer(f"📚 <b>FAQ:</b>\n\n{text}", parse_mode="HTML")
     await callback.answer()
+
+@router.callback_query(F.data == "back_to_main")
+async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        f"Привет, {callback.from_user.first_name}! 👋\nВыберите тему обращения:",
+        reply_markup=get_menu_kb()
+    )
 
 @router.callback_query(F.data.startswith("cat_"))
 async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
