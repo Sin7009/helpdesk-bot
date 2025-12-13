@@ -3,9 +3,11 @@ from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
 from services.faq_service import FAQService
 from core.config import settings
+from core.constants import TICKET_ID_PATTERN
 
 router = Router()
 
@@ -84,13 +86,17 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
     # Проверяем права
     if not await is_admin_or_mod(message.from_user.id, session): return
 
+    # Проверка, что отвечаем боту
+    bot_obj = await bot.get_me()
+    if message.reply_to_message.from_user.id != bot_obj.id:
+        return
+
     # Ищем ID тикета (#123) в тексте, на который ответили
     # The notification text now contains "(ID: #123)"
     origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
 
     # Updated regex to match the new format OR the old format just in case
-    # Look for ID: #(\d+)
-    match = re.search(r"ID:\s*#(\d+)", origin_text)
+    match = re.search(TICKET_ID_PATTERN, origin_text)
 
     # Fallback to just #(\d+) if specific format not found (though risky if other # exist, but okay for now)
     if not match:
@@ -121,7 +127,11 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
     if not await is_admin_or_mod(message.from_user.id, session): return
     try:
         t_id = int(command.args.strip())
-        ticket = await session.get(Ticket, t_id)
+        # Use selectinload to fetch user eagerly for notification
+        stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == t_id)
+        result = await session.execute(stmt)
+        ticket = result.scalar_one_or_none()
+
         if ticket and ticket.status != TicketStatus.CLOSED:
             ticket.status = TicketStatus.CLOSED
             ticket.closed_at = func.now()
@@ -129,7 +139,7 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
 
             # Try notify user
             try:
-                await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
+                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
             except: pass
 
             await message.answer(f"Тикет #{t_id} закрыт.")
@@ -146,7 +156,10 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot, session: Asy
 
     try:
         t_id = int(callback.data.split("_")[1])
-        ticket = await session.get(Ticket, t_id)
+        # Use selectinload to fetch user eagerly for notification
+        stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == t_id)
+        result = await session.execute(stmt)
+        ticket = result.scalar_one_or_none()
         
         if ticket and ticket.status != TicketStatus.CLOSED:
             ticket.status = TicketStatus.CLOSED
@@ -155,9 +168,7 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot, session: Asy
             
             # Уведомляем студента
             try:
-                # Need to find the user via ticket.user (relationship)
-                # Ensure eager load or just access it (lazy load might fail if session closed, but we are in middleware session)
-                await bot.send_message(ticket.user_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
+                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
             except: pass
             
             await callback.message.edit_text(f"{callback.message.text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
@@ -168,34 +179,15 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot, session: Asy
 
 # --- ЛОГИКА ОТПРАВКИ ---
 async def process_reply(bot, session, ticket_id, text, message, close=False):
-    ticket = await session.get(Ticket, ticket_id)
+    # Используем stmt вместо get, чтобы подгрузить User сразу
+    stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+
     if ticket:
+        user = ticket.user # Теперь это безопасно, данные уже в памяти
         # Отправляем студенту
         try:
-            # We need the user object.
-            # If relationship is not loaded, we might need to fetch it.
-            # Assuming lazy loading works within the active session.
-            # However, ticket.user_id is available.
-
-            # Fetch user explicitly if needed or rely on relationship.
-            # ticket.user is defined in models.
-            user = ticket.user
-            # But wait, ticket might not have user loaded if obtained via get().
-            # Although standard asyncio sqlalchemy with lazy='selectin' or explicit loading is safer.
-            # In models.py: user: Mapped["User"] = relationship(back_populates="tickets")
-            # Default loading is lazy='select', which fails in asyncio if not awaited or strictly managed.
-            # But ticket.user_id is an int, we can use that to send message?
-            # Yes, bot.send_message takes chat_id.
-            # User model has 'external_id' which is the TG ID. We need that!
-            # ticket.user_id is the DB PK.
-
-            # So we MUST fetch the user to get external_id.
-            if not user:
-                 # Fetch user manually
-                 user_stmt = select(User).where(User.id == ticket.user_id)
-                 user_res = await session.execute(user_stmt)
-                 user = user_res.scalar_one()
-
             await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
             
             # Сохраняем ответ Админа в историю переписки

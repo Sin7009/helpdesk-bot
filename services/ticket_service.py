@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
 from core.config import settings
+from core.constants import format_ticket_id
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -104,7 +105,7 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         # Create notification text
         category_text = category.name if category else "General"
         admin_text = (
-            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> (ID: #{active_ticket.id})\n"
+            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
             f"От: <a href='tg://user?id={user_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category_text}\n"
             f"Текст: {text}\n\n"
@@ -135,7 +136,7 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         category = ticket.category
 
         admin_text = (
-            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> (ID: #{ticket.id})\n"
+            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
             f"От: <a href='tg://user?id={user.external_id}'>{user.full_name or 'Пользователь'}</a>\n"
             f"Тема: {category.name if category else 'General'}\n"
             f"Текст: {text}\n\n"
