@@ -43,29 +43,32 @@ async def add_category_cmd(message: types.Message, command: CommandObject):
 # 1. Ответ СВАЙПОМ (Native Reply)
 @router.message(F.reply_to_message)
 async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSession):
-    # Проверяем права
+    # 1. Проверка прав
     if not await is_admin_or_mod(message.from_user.id, session): return
 
-    # Проверка, что отвечаем боту
+    # 2. Проверка: отвечаем ли мы боту?
     bot_obj = await bot.get_me()
     if message.reply_to_message.from_user.id != bot_obj.id:
         return
 
-    # Ищем ID тикета (#123) в тексте, на который ответили
-    # The notification text now contains "(ID: #123)"
+    # 3. Парсинг ID
     origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    
+    # Ищем ID: #123 (Основной формат)
+    match = re.search(r"ID:\s*#(\d+)", origin_text)
+    
+    # Fallback (Если вдруг старый формат #123)
+    if not match:
+        match = re.search(r"#(\d+)", origin_text)
 
-    # Updated regex to match the new format OR the old format just in case
-    match = re.search(TICKET_ID_PATTERN, origin_text)
+    if not match:
+        # Если не нашли ID тикета — просто игнорируем
+        return
 
-        if not match:
-            # Если админ отвечает просто так, не на уведомление — игнорируем или пишем подсказку
-            return
+    ticket_id = int(match.group(1))
+    answer_text = message.text
 
-        ticket_id = int(match.group(1))
-        answer_text = message.text
-
-        await process_reply(bot, session, ticket_id, answer_text, message, close=False)
+    await process_reply(bot, session, ticket_id, answer_text, message, close=False)
 
 # 2. Команда /reply ID Текст
 @router.message(Command("reply"))
