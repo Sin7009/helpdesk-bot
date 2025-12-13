@@ -4,35 +4,10 @@ from aiogram import Bot, Dispatcher
 from core.config import settings
 from core.logger import setup_logger
 from database.setup import init_db, new_session
-from database.models import Category
-from sqlalchemy import select
 from handlers.telegram import router as tg_router
 from handlers.admin import router as admin_router
 from services.scheduler import setup_scheduler
 from services.user_service import ensure_admin_exists
-from services.faq_service import FAQService
-from middlewares.db import DbSessionMiddleware
-
-async def on_startup(bot: Bot):
-    logging.info("Executing startup hooks...")
-
-    # 1. Init Session for Startup checks
-    async with new_session() as session:
-        # A. Ensure Admin
-        await ensure_admin_exists(session)
-
-        # B. Init FAQ Cache
-        await FAQService.load_cache(session)
-
-        # C. Init Default Categories
-        result = await session.execute(select(Category))
-        cats = result.scalars().all()
-        if not cats:
-            default_cats = ["Учеба", "Справки", "IT", "Общежитие"]
-            for name in default_cats:
-                session.add(Category(name=name))
-            await session.commit()
-            logging.info("Default categories initialized.")
 
 async def main():
     # 1. Логирование
@@ -44,15 +19,14 @@ async def main():
     await init_db()
     logger.info("Database initialized.")
 
+    # 2.1. Ensure Admin exists
+    async with new_session() as session:
+        await ensure_admin_exists(session)
+    logger.info("Admin checks completed.")
+
     # 3. Бот и Диспетчер
     bot = Bot(token=settings.TG_BOT_TOKEN)
     dp = Dispatcher()
-
-    # 3.1 Startup Hook
-    dp.startup.register(on_startup)
-
-    # 3.2 Middleware
-    dp.update.outer_middleware(DbSessionMiddleware(new_session))
 
     # 4. Подключаем логику (Роутер)
     dp.include_router(admin_router) # Admin router first to catch commands
