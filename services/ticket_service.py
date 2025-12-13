@@ -1,10 +1,12 @@
 import logging
 import datetime
+import html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload  # <--- 1. ВАЖНЫЙ ИМПОРТ
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
 from core.config import settings
+from core.constants import format_ticket_id
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -110,6 +112,7 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
     try:
         # Create notification text
         category_text = category.name if category else "General"
+        safe_user_name = html.escape(user_full_name)
         admin_text = (
             f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
             f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
@@ -142,6 +145,7 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
         user = ticket.user
         category = ticket.category
+        safe_user_name = html.escape(user.full_name or "Пользователь")
 
         admin_text = (
             f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
