@@ -55,7 +55,13 @@ async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
     else:
         text = "База знаний пока пуста."
 
-    await callback.message.answer(f"📚 <b>FAQ:</b>\n\n{text}", parse_mode="HTML")
+    # UX Improvement: Use edit_text to keep chat clean and provide a "Back" button
+    await callback.message.edit_text(
+        f"📚 <b>FAQ:</b>\n\n{text}",
+        parse_mode="HTML",
+        reply_markup=get_back_kb()
+    )
+    # Always answer callback to stop loading animation
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
