@@ -1,3 +1,4 @@
+import html
 from aiogram import Router, F, Bot, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -51,7 +52,7 @@ async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
     faqs = result.scalars().all()
 
     if faqs:
-        text = "\n".join([f"🔹 {f.trigger_word}: {f.answer_text}" for f in faqs])
+        text = "\n".join([f"🔹 {html.escape(f.trigger_word)}: {html.escape(f.answer_text)}" for f in faqs])
     else:
         text = "База знаний пока пуста."
 
@@ -107,7 +108,8 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
 
     for faq in faqs:
             if faq.trigger_word.lower() in message.text.lower():
-                await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
+                safe_answer = html.escape(faq.answer_text)
+                await message.answer(f"🤖 <b>Подсказка:</b>\n{safe_answer}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
                 return
 
     # 3. Проверка на активный тикет (добавление сообщения)

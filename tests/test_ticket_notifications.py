@@ -25,6 +25,12 @@ async def test_add_message_to_ticket_notifies_admin():
         status=TicketStatus.IN_PROGRESS
     )
 
+    # Mock session.execute to return the ticket when queried
+    # We need to handle the new query in add_message_to_ticket
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = ticket
+    session.execute.return_value = mock_result
+
     # Execute function
     await add_message_to_ticket(session, ticket, "New message text", bot)
 

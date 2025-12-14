@@ -100,7 +100,9 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         if h.id == active_ticket.id: continue # Skip current
         date_str = h.created_at.strftime("%d.%m.%Y")
         summary = h.summary or h.question_text[:30] + "..." if h.question_text else "No text"
-        history_text += f"- {date_str}: {summary}\n"
+        # Escape summary to prevent injection from previous tickets
+        safe_summary = html.escape(summary)
+        history_text += f"- {date_str}: {safe_summary}\n"
 
     if not history_text:
         history_text = "Нет предыдущих обращений"
@@ -113,11 +115,12 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         # Create notification text
         category_text = category.name if category else "General"
         safe_user_name = html.escape(user_full_name)
+        safe_text = html.escape(text)
         admin_text = (
             f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
             f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
             f"Тема: {category_text}\n"
-            f"Текст: {text}\n\n"
+            f"Текст: {safe_text}\n\n"
             f"<i>История:</i>\n{history_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
         )
@@ -143,15 +146,25 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
     # Notify Staff/Admin
     try:
         # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
-        user = ticket.user
-        category = ticket.category
+        # Ensure we have the user and category loaded
+        stmt = select(Ticket).options(selectinload(Ticket.user), selectinload(Ticket.category)).where(Ticket.id == ticket.id)
+        # Using a new query to ensure they are loaded if not already attached/loaded
+        # Note: If they are already loaded on the instance, this might be redundant but safe.
+        # However, to avoid 'MissingGreenlet', we should ensure they are loaded in async context.
+        # But wait, we passed 'ticket' which might be detached or not loaded.
+        # Best way is to use the passed session to refresh or merge if needed, but simple reload is easier.
+        refreshed_ticket = (await session.execute(stmt)).scalar_one()
+
+        user = refreshed_ticket.user
+        category = refreshed_ticket.category
         safe_user_name = html.escape(user.full_name or "Пользователь")
+        safe_text = html.escape(text)
 
         admin_text = (
             f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
             f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
             f"Тема: {category.name if category else 'General'}\n"
-            f"Текст: {text}\n\n"
+            f"Текст: {safe_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
         )
 

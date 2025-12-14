@@ -1,4 +1,5 @@
 import re
+import html
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, func
@@ -159,7 +160,8 @@ async def process_reply(bot, session, ticket_id, text, message, close=False):
         user = ticket.user # Теперь это безопасно, данные уже в памяти
         # Отправляем студенту
         try:
-            await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
+            safe_text = html.escape(text)
+            await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{safe_text}", parse_mode="HTML")
             
             # Сохраняем ответ Админа в историю переписки
             msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)

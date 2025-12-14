@@ -1,4 +1,4 @@
-## 2024-05-23 - HTML Injection in Telegram Messages
-**Vulnerability:** User input (name and message text) was directly injected into HTML-formatted Telegram messages sent to admins.
-**Learning:** Even internal/admin-facing messages are vulnerable to XSS-like injection if they render HTML. Telegram's `parse_mode='HTML'` respects tags like `<b>`, `<i>`, `<a>`, which allows attackers to spoof formatting or inject malicious links.
-**Prevention:** Always use `html.escape()` for any variable content inserted into a string destined for `parse_mode='HTML'`.
+## 2024-02-14 - HTML Injection in Telegram Bot
+**Vulnerability:** User input and historical data were interpolated directly into Telegram messages with `parse_mode="HTML"`. This allowed users to inject HTML tags, potentially spoofing messages or breaking formatting.
+**Learning:** Telegram's `parse_mode="HTML"` is not safe by default. All user input (text, names, external IDs) must be escaped using `html.escape()` before interpolation. Also, mocking SQLAlchemy `AsyncSession` requires careful handling of return values, especially when adding new queries that expect synchronous methods like `scalar_one()` on the result.
+**Prevention:** Always wrap user input in `html.escape()` when constructing messages for Telegram with HTML parsing. Use strict type checking or linting rules if possible to enforce this.
