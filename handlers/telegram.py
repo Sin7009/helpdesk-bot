@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
+from services.faq_service import FAQService
 from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category
 
 from core.config import settings
@@ -45,10 +46,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "show_faq")
 async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
-    # Используем session из Middleware (аргумент)
-    stmt = select(FAQ).order_by(FAQ.trigger_word)
-    result = await session.execute(stmt)
-    faqs = result.scalars().all()
+    # Оптимизация: используем кэш вместо запроса к БД
+    faqs = FAQService.get_all_faqs()
 
     if faqs:
         text = "\n".join([f"🔹 {f.trigger_word}: {f.answer_text}" for f in faqs])
@@ -106,15 +105,11 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
     if message.chat.id == settings.TG_STAFF_CHAT_ID:
         return
 
-    # 2. Проверка FAQ
-    stmt = select(FAQ)
-    result = await session.execute(stmt)
-    faqs = result.scalars().all()
-
-    for faq in faqs:
-            if faq.trigger_word.lower() in message.text.lower():
-                await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
-                return
+    # 2. Проверка FAQ (Оптимизация: используем кэш)
+    faq = FAQService.find_match(message.text)
+    if faq:
+        await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
+        return
 
     # 3. Проверка на активный тикет (добавление сообщения)
     active_ticket = await get_active_ticket(session, message.from_user.id, SourceType.TELEGRAM)
