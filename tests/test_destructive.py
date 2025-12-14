@@ -79,3 +79,68 @@ async def test_create_ticket_silent_notification_failure_on_large_payload(test_s
     # 3. The logic SWALLOWED the exception (Function did not crash)
     # This confirms the "silent failure" vulnerability.
     # Admin is unaware of this new ticket.
+
+@pytest.mark.asyncio
+async def test_create_ticket_fails_with_unescaped_html_input(test_session):
+    """
+    Destructive Test: Verifies that unescaped HTML characters in user input
+    cause admin notifications to fail silently due to HTML parsing errors.
+
+    Vulnerability:
+    1. User sends message with text like "I need help <3".
+    2. `create_ticket` injects this text directly into an HTML template:
+       f"Текст: {text}\n\n"
+    3. Telegram API rejects the message because "<3" looks like an incomplete tag.
+    4. The exception is caught by the broad `except Exception` block in `create_ticket`.
+    5. Result: Ticket is created in DB, but admins are NEVER notified.
+    """
+
+    # Mock Bot
+    bot = AsyncMock()
+
+    # Simulate Telegram API error on invalid HTML
+    async def side_effect(*args, **kwargs):
+        text = args[1]
+        parse_mode = kwargs.get('parse_mode')
+
+        # If we are in HTML mode and find unescaped tag-like chars
+        if parse_mode == "HTML":
+            # Check for the specific problematic input we are testing
+            if "<3" in text:
+                raise Exception("Bad Request: Can't parse entities: ...")
+
+        return MagicMock()
+
+    bot.send_message.side_effect = side_effect
+
+    # Input that mimics a common user typo or usage (e.g. heart emoji text)
+    bad_input = "Hello admin! I love this bot <3 please help me."
+
+    # Execute
+    ticket = await create_ticket(
+        test_session,
+        user_id=88888,
+        source="tg",
+        text=bad_input,
+        bot=bot,
+        category_name="Bug",
+        user_full_name="InnocentUser"
+    )
+
+    # ASSERTIONS
+
+    # 1. Ticket created in DB
+    assert ticket is not None
+    assert ticket.id is not None
+
+    # 2. Notification logic executed but FAILED
+    assert bot.send_message.called
+
+    # Verify the bad text was indeed passed to the bot
+    call_args = bot.send_message.call_args
+    sent_text = call_args.args[1]
+    assert bad_input in sent_text
+
+    # 3. Exception was swallowed (Function returned successfully)
+    # If the exception wasn't caught, the test would have crashed with the Exception raised by side_effect.
+    # Since we are here, the function suppressed the error.
