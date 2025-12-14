@@ -18,7 +18,8 @@ class FAQService:
         logger.info(f"FAQ Cache loaded: {len(cls._cache)} items.")
 
     @classmethod
-    def get_cache(cls) -> List[FAQ]:
+    def get_all_faqs(cls) -> List[FAQ]:
+        """Returns all FAQs from the in-memory cache."""
         return cls._cache
 
     @classmethod

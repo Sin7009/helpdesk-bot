@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User as TgUser, Chat
-from database.models import User, Ticket, TicketStatus
+from database.models import User, Ticket, TicketStatus, Category
 from handlers.telegram import cmd_start, select_cat, handle_text, TicketForm
 from core.config import settings
 
@@ -108,35 +108,41 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
     message.from_user.full_name = "User"
     message.answer = AsyncMock()
 
-    # handle_text calls:
-    # 1. select(FAQ) -> result.scalars().all()
-    # 2. get_active_ticket -> User check -> result.scalar_one_or_none()
-    # 3. get_active_ticket -> Ticket check -> result.scalar_one_or_none()
+    # Mock FAQService
+    with patch("handlers.telegram.FAQService") as MockFAQService:
+        MockFAQService.find_match.return_value = None
 
-    # We need to setup side effects for execute returns.
+        # handle_text calls:
+        # 1. FAQService.find_match -> Mocked to return None
+        # 2. get_active_ticket -> User check -> result.scalar_one_or_none()
+        # 3. get_active_ticket -> Ticket check -> result.scalar_one_or_none()
 
-    # Mocks for results
-    faq_result = MagicMock()
-    faq_result.scalars.return_value.all.return_value = []
+        # We need to setup side effects for execute returns.
 
-    user_result = MagicMock()
-    user_result.scalar_one_or_none.return_value = User(id=1, external_id=123, source="tg")
+        # User Result
+        user_result = MagicMock()
+        user_result.scalar_one_or_none.return_value = User(id=1, external_id=123, source="tg")
 
-    ticket_result = MagicMock()
-    active_ticket = Ticket(id=1, user_id=1, daily_id=1, status=TicketStatus.NEW, user=User(full_name="User", external_id=123), category=None)
-    ticket_result.scalar_one_or_none.return_value = active_ticket
+        # Ticket Result
+        ticket_result = MagicMock()
+        active_ticket = Ticket(id=1, user_id=1, daily_id=1, status=TicketStatus.NEW, user=User(full_name="User", external_id=123), category=Category(name="Test"))
+        ticket_result.scalar_one_or_none.return_value = active_ticket
 
-    # We can use side_effect on session.execute to return different results
-    mock_session.execute.side_effect = [
-        faq_result,
-        user_result,
-        ticket_result
-    ]
+        # We can use side_effect on session.execute to return different results
+        mock_session.execute.side_effect = [
+            user_result,
+            ticket_result
+        ]
 
-    await handle_text(message, mock_state, mock_bot, mock_session)
+        # We also need to mock session.add for add_message_to_ticket
+        # It adds a Message object.
+        mock_session.add = MagicMock()
 
-    message.answer.assert_called_with("✅ Сообщение добавлено к диалогу.")
-    mock_state.clear.assert_called()
+        await handle_text(message, mock_state, mock_bot, mock_session)
+
+        message.answer.assert_called_with("✅ Сообщение добавлено к диалогу.")
+        mock_state.clear.assert_called()
+        MockFAQService.find_match.assert_called_once_with("Additional info")
 
 @pytest.mark.asyncio
 async def test_handle_text_create_ticket(mock_session, mock_state, mock_bot):
