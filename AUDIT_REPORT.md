@@ -1,51 +1,63 @@
 # Code Audit Report
 
-This report summarizes technical debt, code quality issues, and security vulnerabilities identified in the codebase.
+**Date:** 2024-05-22
+**Auditor:** Jules (Senior Technical Lead)
+**Scope:** Structural analysis of Python codebase (Ghost Code, Documentation, TODOs, Security).
 
-## `services/ticket_service.py`
-
-*   **[HIGH] Security / HTML Injection**
-    *   **Issue:** In `create_ticket` and `add_message_to_ticket`, `safe_user_name` is calculated using `html.escape`, but `user.full_name` (unescaped) is used directly in the formatted f-string for `admin_text`. This allows a user to inject HTML tags (e.g., links, formatting) into the admin notification.
-    *   **Refactoring Action:** Replace `{user.full_name or 'Пользователь'}` with `{safe_user_name}` in the f-string.
-
-## `handlers/telegram.py`
-
-*   **[HIGH] Bug / Potential Crash**
-    *   **Issue:** In `select_cat`, the variable `category` is used in `await state.update_data(category=category)` and in the response text, but it is **not defined**. The code defines `category_name = "Общее"`, but never assigns `category`. This will cause a `NameError`.
-    *   **Refactoring Action:** Assign `category = category_name` or properly map `cat_data` to a category name before use.
-
-*   **[MEDIUM] Logic Error**
-    *   **Issue:** In `select_cat`, `category_name` is hardcoded to `"Общее"`, effectively ignoring the user's selection from `callback.data`. The menu structure exists (e.g., `cat_study`), but the logic to map these keys to names is missing.
-    *   **Refactoring Action:** Create a dictionary mapping callback data (e.g., `cat_study`) to display names and look it up.
-
-*   **[LOW] Documentation**
-    *   **Issue:** `handle_text` function is complex (handling FAQ, Active Ticket, New Ticket flows) and lacks docstrings explaining the logic.
-    *   **Refactoring Action:** Add a docstring explaining the three-way logic flow.
-
-## `database/models.py`
-
-*   **[LOW] Ghost Code**
-    *   **Issue:** `SourceType.VK` is defined but unused, as the project is Telegram-only.
-    *   **Refactoring Action:** Remove `VK` from the `SourceType` enum.
-
-*   **[LOW] Outdated Comment**
-    *   **Issue:** Comment `# daily_id: Integer, reset every day. Needs logic to handle this...` is outdated as the logic is now implemented in `ticket_service.py`.
-    *   **Refactoring Action:** Remove the comment.
-
-## `handlers/admin.py`
-
-*   **[LOW] Ghost Code**
-    *   **Issue:** `is_root_admin` function is defined but not used (only `is_admin_or_mod` is used).
-    *   **Refactoring Action:** Remove the unused `is_root_admin` function.
-
-## `services/scheduler.py`
-
-*   **[LOW] Ghost Code**
-    *   **Issue:** `today_end` variable is calculated but never used.
-    *   **Refactoring Action:** Remove the `today_end` variable.
+---
 
 ## `core/config.py`
 
-*   **[LOW] Hardcoded Value**
-    *   **Issue:** Database path is hardcoded as default `/app/data/support.db`.
-    *   **Refactoring Action:** Consider removing default or ensuring it matches all environments, though acceptable for containerized setups.
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[MEDIUM]** | Security | Hardcoded default `DB_NAME` path `/app/data/support.db`. | Remove default or use `tempfile` for dev/test environments. |
+
+## `database/models.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[LOW]** | Ghost Code | `SourceType.VK` is unused as VK support was removed. | Remove `VK = "vk"` from Enum. |
+| **[LOW]** | Ghost Code | Outdated comment block about `daily_id` logic. | Remove commented-out explanation. |
+
+## `handlers/admin.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[MEDIUM]** | Maintainability | `process_reply` regex for ID extraction is duplicated/fragile. | Use `core.constants.TICKET_ID_PATTERN` for consistent matching. |
+| **[LOW]** | Security/Logic | Bare `try...except: pass` in `admin_close_ticket` hides notification failures. | Log the error: `logger.warning(f"Failed to notify user: {e}")`. |
+| **[LOW]** | Naming | Variable `match` in `admin_reply_native` is generic. | Rename `match` to `ticket_id_match`. |
+
+## `handlers/telegram.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[LOW]** | Naming | Variable `t` in `handle_text` is vague. | Rename `t` to `new_ticket`. |
+
+## `migrate_db.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[LOW]** | Ghost Code | Local import of `new_session` in `seed_categories`. | Move import to top-level. |
+
+## `services/scheduler.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[LOW]** | Documentation | Ambiguous logic comment "Отвечено: M". | Clarify comment to "Count closed tickets as resolved". |
+
+## `services/ticket_service.py`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[HIGH]** | Security/Logic | `create_ticket` swallows notification errors (Silent Failure). | Re-raise exception or implement reliable retry queue for admin alerts. |
+| **[MEDIUM]** | Documentation | `create_ticket` (>50 lines) lacks a docstring. | Add Google-style docstring explaining args and side effects. |
+
+## `.env.example`
+
+| Severity | Category | Issue | Refactoring Action |
+| :--- | :--- | :--- | :--- |
+| **[LOW]** | Ghost Code | `VK_TOKEN` variable is unused. | Remove `VK_TOKEN` line. |
+
+---
+**Summary:**
+The codebase is relatively clean but suffers from a critical pattern of "swallowing exceptions" in notification logic, which can lead to silent failures (tickets created but admins never notified). There is also some leftover "ghost code" from the removed VK integration.
