@@ -76,7 +76,11 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     # 1. Проверка активного тикета
     active_ticket = await get_active_ticket(session, callback.from_user.id, SourceType.TELEGRAM)
     if active_ticket:
-        await callback.answer("⚠️ У вас уже есть открытый диалог. Дождитесь ответа или закройте его.", show_alert=True)
+        await callback.answer(
+            f"⚠️ У вас уже есть активная заявка #{active_ticket.daily_id}.\n\n"
+            "Просто напишите сообщение в чат, чтобы дополнить её.",
+            show_alert=True
+        )
         return
 
     # 2. Определение категории
