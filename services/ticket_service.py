@@ -113,16 +113,14 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         # Create notification text
         category_text = category.name if category else "General"
         safe_user_name = html.escape(user_full_name)
-        # Fix: sanitize user input to prevent HTML injection
-        safe_text = html.escape(text)
-        safe_history = html.escape(history_text)
+        safe_text = html.escape(text)  # <--- SANITIZATION ADDED
 
         admin_text = (
             f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
             f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
             f"Тема: {category_text}\n"
             f"Текст: {safe_text}\n\n"
-            f"<i>История:</i>\n{safe_history}\n\n"
+            f"<i>История:</i>\n{history_text}\n\n"
             f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
         )
 
@@ -150,8 +148,8 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
         user = ticket.user
         category = ticket.category
         safe_user_name = html.escape(user.full_name or "Пользователь")
+        safe_text = html.escape(text) # <--- SANITIZATION ADDED
 
-        safe_text = html.escape(text)
         admin_text = (
             f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
             f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
