@@ -1,4 +1,5 @@
 import pytest
+import html
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.models import Base
 from services.ticket_service import create_ticket
@@ -81,18 +82,13 @@ async def test_create_ticket_silent_notification_failure_on_large_payload(test_s
     # Admin is unaware of this new ticket.
 
 @pytest.mark.asyncio
-async def test_create_ticket_fails_with_unescaped_html_input(test_session):
+async def test_create_ticket_handles_unescaped_html_input(test_session):
     """
-    Destructive Test: Verifies that unescaped HTML characters in user input
-    cause admin notifications to fail silently due to HTML parsing errors.
+    Verified Fix: Ensures that unescaped HTML characters in user input
+    are SANITIZED and do NOT cause admin notifications to fail.
 
-    Vulnerability:
-    1. User sends message with text like "I need help <3".
-    2. `create_ticket` injects this text directly into an HTML template:
-       f"Текст: {text}\n\n"
-    3. Telegram API rejects the message because "<3" looks like an incomplete tag.
-    4. The exception is caught by the broad `except Exception` block in `create_ticket`.
-    5. Result: Ticket is created in DB, but admins are NEVER notified.
+    Previously: Input like "<3" caused HTML parsing errors.
+    Now: "<3" becomes "&lt;3" and is safe.
     """
 
     # Mock Bot
@@ -106,6 +102,7 @@ async def test_create_ticket_fails_with_unescaped_html_input(test_session):
         # If we are in HTML mode and find unescaped tag-like chars
         if parse_mode == "HTML":
             # Check for the specific problematic input we are testing
+            # If sanitization works, "<3" should NOT be present (it should be &lt;3)
             if "<3" in text:
                 raise Exception("Bad Request: Can't parse entities: ...")
 
@@ -133,14 +130,16 @@ async def test_create_ticket_fails_with_unescaped_html_input(test_session):
     assert ticket is not None
     assert ticket.id is not None
 
-    # 2. Notification logic executed but FAILED
+    # 2. Notification logic executed successfully (No Exception raised by side_effect)
     assert bot.send_message.called
 
-    # Verify the bad text was indeed passed to the bot
+    # Verify the text passed to the bot IS SANITIZED
     call_args = bot.send_message.call_args
     sent_text = call_args.args[1]
-    assert bad_input in sent_text
 
-    # 3. Exception was swallowed (Function returned successfully)
-    # If the exception wasn't caught, the test would have crashed with the Exception raised by side_effect.
-    # Since we are here, the function suppressed the error.
+    # Original bad input should NOT be in the sent text literally
+    assert bad_input not in sent_text
+
+    # Escaped version SHOULD be in the sent text
+    expected_safe_text = html.escape(bad_input)
+    assert expected_safe_text in sent_text
