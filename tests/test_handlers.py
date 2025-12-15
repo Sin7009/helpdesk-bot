@@ -62,7 +62,13 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
 
     await select_cat(callback, mock_state, mock_session)
 
-    callback.answer.assert_called_with("⚠️ У вас уже есть открытый диалог. Дождитесь ответа или закройте его.", show_alert=True)
+    # Updated assertion for UX improvement
+    # We check that the message text contains the new helpful info
+    args, kwargs = callback.answer.call_args
+    assert "⚠️ У вас уже есть активная заявка" in args[0]
+    assert "Просто напишите сообщение в чат" in args[0]
+    assert kwargs['show_alert'] is True
+
     mock_state.set_state.assert_not_called()
 
 @pytest.mark.asyncio
