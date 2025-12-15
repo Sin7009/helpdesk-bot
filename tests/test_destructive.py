@@ -81,19 +81,19 @@ async def test_create_ticket_silent_notification_failure_on_large_payload(test_s
     # Admin is unaware of this new ticket.
 
 @pytest.mark.asyncio
-async def test_create_ticket_fails_with_unescaped_html_input(test_session):
+async def test_create_ticket_handles_unescaped_html_input(test_session):
     """
-    Destructive Test: Verifies that unescaped HTML characters in user input
-    cause admin notifications to fail silently due to HTML parsing errors.
+    Verifies that unescaped HTML characters in user input are PROPERLY ESCAPED
+    and do NOT cause admin notifications to fail.
 
-    Vulnerability:
+    Previously a Vulnerability:
     1. User sends message with text like "I need help <3".
-    2. `create_ticket` injects this text directly into an HTML template:
-       f"Текст: {text}\n\n"
-    3. Telegram API rejects the message because "<3" looks like an incomplete tag.
-    4. The exception is caught by the broad `except Exception` block in `create_ticket`.
-    5. Result: Ticket is created in DB, but admins are NEVER notified.
+    2. `create_ticket` injected this text directly.
+    3. Telegram API rejected the message.
+
+    Fix: Input should be html.escape()d.
     """
+    import html
 
     # Mock Bot
     bot = AsyncMock()
@@ -106,6 +106,7 @@ async def test_create_ticket_fails_with_unescaped_html_input(test_session):
         # If we are in HTML mode and find unescaped tag-like chars
         if parse_mode == "HTML":
             # Check for the specific problematic input we are testing
+            # If it's NOT escaped, it will trigger the error
             if "<3" in text:
                 raise Exception("Bad Request: Can't parse entities: ...")
 
@@ -115,6 +116,7 @@ async def test_create_ticket_fails_with_unescaped_html_input(test_session):
 
     # Input that mimics a common user typo or usage (e.g. heart emoji text)
     bad_input = "Hello admin! I love this bot <3 please help me."
+    expected_escaped = html.escape(bad_input) # "Hello admin! I love this bot &lt;3 please help me."
 
     # Execute
     ticket = await create_ticket(
@@ -133,14 +135,12 @@ async def test_create_ticket_fails_with_unescaped_html_input(test_session):
     assert ticket is not None
     assert ticket.id is not None
 
-    # 2. Notification logic executed but FAILED
+    # 2. Notification logic executed successfully
     assert bot.send_message.called
 
-    # Verify the bad text was indeed passed to the bot
+    # Verify the text was ESCAPED in the bot message
     call_args = bot.send_message.call_args
     sent_text = call_args.args[1]
-    assert bad_input in sent_text
 
-    # 3. Exception was swallowed (Function returned successfully)
-    # If the exception wasn't caught, the test would have crashed with the Exception raised by side_effect.
-    # Since we are here, the function suppressed the error.
+    assert expected_escaped in sent_text
+    assert "<3" not in sent_text # Should not contain raw unescaped chars
