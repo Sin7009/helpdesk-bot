@@ -151,7 +151,7 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
         MockFAQService.find_match.assert_called_once_with("Additional info")
 
 @pytest.mark.asyncio
-async def test_handle_text_create_ticket(mock_session, mock_state, mock_bot):
+async def test_handle_text_create_ticket_success_message(mock_session, mock_state, mock_bot):
     message = AsyncMock(spec=Message)
     message.chat = MagicMock(spec=Chat)
     message.chat.id = 12345
@@ -164,10 +164,22 @@ async def test_handle_text_create_ticket(mock_session, mock_state, mock_bot):
     mock_state.get_state.return_value = TicketForm.waiting_text
     mock_state.get_data.return_value = {"category": "Учеба"}
 
-    # This is getting complex to mock the entire create_ticket flow with all DB calls.
-    # It would require precise knowledge of the order of execute calls in create_ticket.
-    # Given the previous tests cover the logic branching in handler, we can skip deep testing of create_ticket integration here
-    # or Mock create_ticket function itself?
+    with patch("handlers.telegram.FAQService") as MockFAQService, \
+         patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket, \
+         patch("handlers.telegram.create_ticket", new_callable=AsyncMock) as mock_create_ticket:
 
-    # To mock create_ticket, we would need to patch it.
-    pass
+        MockFAQService.find_match.return_value = None
+        mock_get_active_ticket.return_value = None
+
+        # Mock created ticket
+        ticket = MagicMock()
+        ticket.daily_id = 999
+        mock_create_ticket.return_value = ticket
+
+        await handle_text(message, mock_state, mock_bot, mock_session)
+
+        # Check that the success message is called and contains expected info
+        args, kwargs = message.answer.call_args
+
+        assert "✅ <b>Заявка #999 принята!</b>" in args[0]
+        assert "Мы ответим в рабочее время" in args[0]
