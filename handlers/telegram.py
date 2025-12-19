@@ -137,8 +137,8 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         t = await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, category, message.from_user.full_name)
         await message.answer(
             f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
-            "🕒 Мы ответим в рабочее время.\n"
-            "🔔 Вам придет уведомление.",
+            f"🕒 Оператор ответит в рабочее время.\n"
+            f"🔔 Вы получите уведомление об ответе.",
             parse_mode="HTML"
         )
         await state.clear()
