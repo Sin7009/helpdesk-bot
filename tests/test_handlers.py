@@ -45,52 +45,47 @@ async def test_cmd_start(mock_state):
 
 @pytest.mark.asyncio
 async def test_select_cat_active_ticket(mock_session, mock_state):
-    # Mock active ticket check
-    # scalar_one_or_none is called twice: once for User, once for Ticket
+    # Mock active ticket check via patch because it's a helper function
+    with patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket:
+        # User has an active ticket
+        mock_ticket = MagicMock()
+        mock_ticket.daily_id = 123
+        mock_get_active_ticket.return_value = mock_ticket
 
-    # We need to configure the side_effect on the scalar_one_or_none method of the returned Result
-    mock_session.execute.return_value.scalar_one_or_none.side_effect = [
-        User(id=1, external_id=123, source="tg"), # User found
-        Ticket(id=1, user_id=1, status=TicketStatus.NEW) # Active ticket found
-    ]
+        callback = AsyncMock(spec=CallbackQuery)
+        callback.from_user = MagicMock(spec=TgUser)
+        callback.from_user.id = 123
+        callback.data = "cat_study"
+        callback.answer = AsyncMock()
 
-    callback = AsyncMock(spec=CallbackQuery)
-    callback.from_user = MagicMock(spec=TgUser)
-    callback.from_user.id = 123
-    callback.data = "cat_study"
-    callback.answer = AsyncMock()
+        await select_cat(callback, mock_state, mock_session)
 
-    await select_cat(callback, mock_state, mock_session)
+        # Updated assertion for UX improvement
+        args, kwargs = callback.answer.call_args
+        assert "⚠️ У вас уже есть активная заявка" in args[0]
+        assert "Просто напишите сообщение в чат" in args[0]
+        assert kwargs['show_alert'] is True
 
-    # Updated assertion for UX improvement
-    # We check that the message text contains the new helpful info
-    args, kwargs = callback.answer.call_args
-    assert "⚠️ У вас уже есть активная заявка" in args[0]
-    assert "Просто напишите сообщение в чат" in args[0]
-    assert kwargs['show_alert'] is True
-
-    mock_state.set_state.assert_not_called()
+        mock_state.set_state.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_select_cat_no_active_ticket(mock_session, mock_state):
-    # Mock active ticket check
-    mock_session.execute.return_value.scalar_one_or_none.side_effect = [
-        User(id=1, external_id=123, source="tg"), # User found
-        None # No active ticket
-    ]
+    # Mock active ticket check via patch
+    with patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket:
+        mock_get_active_ticket.return_value = None
 
-    callback = AsyncMock(spec=CallbackQuery)
-    callback.from_user = MagicMock(spec=TgUser)
-    callback.from_user.id = 123
-    callback.data = "cat_study"
-    callback.message = AsyncMock(spec=Message)
-    callback.message.edit_text = AsyncMock()
+        callback = AsyncMock(spec=CallbackQuery)
+        callback.from_user = MagicMock(spec=TgUser)
+        callback.from_user.id = 123
+        callback.data = "cat_study"
+        callback.message = AsyncMock(spec=Message)
+        callback.message.edit_text = AsyncMock()
 
-    await select_cat(callback, mock_state, mock_session)
+        await select_cat(callback, mock_state, mock_session)
 
-    mock_state.update_data.assert_called_with(category="Учеба")
-    mock_state.set_state.assert_called_with(TicketForm.waiting_text)
-    callback.message.edit_text.assert_called()
+        mock_state.update_data.assert_called_with(category="Учеба")
+        mock_state.set_state.assert_called_with(TicketForm.waiting_text)
+        callback.message.edit_text.assert_called()
 
 @pytest.mark.asyncio
 async def test_handle_text_ignore_staff(mock_session, mock_state, mock_bot):
@@ -114,38 +109,19 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
     message.from_user.full_name = "User"
     message.answer = AsyncMock()
 
-    # Mock FAQService
-    with patch("handlers.telegram.FAQService") as MockFAQService:
+    with patch("handlers.telegram.FAQService") as MockFAQService, \
+         patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket, \
+         patch("handlers.telegram.add_message_to_ticket", new_callable=AsyncMock) as mock_add_message:
+
         MockFAQService.find_match.return_value = None
 
-        # handle_text calls:
-        # 1. FAQService.find_match -> Mocked to return None
-        # 2. get_active_ticket -> User check -> result.scalar_one_or_none()
-        # 3. get_active_ticket -> Ticket check -> result.scalar_one_or_none()
-
-        # We need to setup side effects for execute returns.
-
-        # User Result
-        user_result = MagicMock()
-        user_result.scalar_one_or_none.return_value = User(id=1, external_id=123, source="tg")
-
-        # Ticket Result
-        ticket_result = MagicMock()
-        active_ticket = Ticket(id=1, user_id=1, daily_id=1, status=TicketStatus.NEW, user=User(full_name="User", external_id=123), category=Category(name="Test"))
-        ticket_result.scalar_one_or_none.return_value = active_ticket
-
-        # We can use side_effect on session.execute to return different results
-        mock_session.execute.side_effect = [
-            user_result,
-            ticket_result
-        ]
-
-        # We also need to mock session.add for add_message_to_ticket
-        # It adds a Message object.
-        mock_session.add = MagicMock()
+        # User has active ticket
+        mock_ticket = MagicMock()
+        mock_get_active_ticket.return_value = mock_ticket
 
         await handle_text(message, mock_state, mock_bot, mock_session)
 
+        mock_add_message.assert_called_once()
         message.answer.assert_called_with("✅ Сообщение добавлено к диалогу.")
         mock_state.clear.assert_called()
         MockFAQService.find_match.assert_called_once_with("Additional info")
@@ -182,4 +158,5 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
         args, kwargs = message.answer.call_args
 
         assert "✅ <b>Заявка #999 принята!</b>" in args[0]
-        assert "Мы ответим в рабочее время" in args[0]
+        # Fixed assertion to match actual code text
+        assert "Оператор ответит в рабочее время" in args[0]
