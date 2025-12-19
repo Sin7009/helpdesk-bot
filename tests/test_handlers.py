@@ -52,12 +52,17 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
         mock_ticket.daily_id = 123
         mock_get_active_ticket.return_value = mock_ticket
 
-    # We need to configure the side_effect on the scalar_one_or_none method of the returned Result
-    # get_active_ticket calls session.execute ONCE.
-    # So we should return the Ticket object directly (which contains the user via relationship if needed, though mocked here)
-    mock_session.execute.return_value.scalar_one_or_none.side_effect = [
-        Ticket(id=1, daily_id=100, user_id=1, status=TicketStatus.NEW) # Active ticket found
-    ]
+        # We need to configure the side_effect on the scalar_one_or_none method of the returned Result
+        # get_active_ticket calls session.execute ONCE.
+        # So we should return the Ticket object directly (which contains the user via relationship if needed, though mocked here)
+        mock_session.execute.return_value.scalar_one_or_none.side_effect = [
+            Ticket(id=1, daily_id=100, user_id=1, status=TicketStatus.NEW) # Active ticket found
+        ]
+
+        callback = AsyncMock(spec=CallbackQuery)
+        callback.from_user = MagicMock(spec=TgUser)
+        callback.from_user.id = 123
+        callback.answer = AsyncMock()
 
         await select_cat(callback, mock_state, mock_session)
 
@@ -75,6 +80,9 @@ async def test_select_cat_no_active_ticket(mock_session, mock_state):
     mock_session.execute.return_value.scalar_one_or_none.side_effect = [
         None # No active ticket
     ]
+
+    with patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket:
+        mock_get_active_ticket.return_value = None
 
         callback = AsyncMock(spec=CallbackQuery)
         callback.from_user = MagicMock(spec=TgUser)
