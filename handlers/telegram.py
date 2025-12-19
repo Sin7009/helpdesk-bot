@@ -135,12 +135,18 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         category = data.get("category", "Общее")
 
         t = await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, category, message.from_user.full_name)
-        await message.answer(f"✅ <b>Заявка #{t.daily_id} принята!</b>", parse_mode="HTML")
+        await message.answer(
+            f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
+            f"🕒 Оператор ответит в рабочее время.\n"
+            f"🔔 Вы получите уведомление об ответе.",
+            parse_mode="HTML"
+        )
         await state.clear()
         return
 
     # 5. Если студент пишет "Привет" без выбора меню
     await message.answer(
-        "Чтобы задать вопрос, выберите категорию:",
+        "👋 Я пока не понимаю простого текста.\n\n"
+        "Пожалуйста, выберите тему в меню ниже, чтобы я мог передать ваш вопрос специалисту:",
         reply_markup=get_menu_kb()
     )
