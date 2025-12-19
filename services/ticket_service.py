@@ -3,7 +3,7 @@ import datetime
 import html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
-from sqlalchemy.orm import selectinload  # <--- 1. ВАЖНЫЙ ИМПОРТ
+from sqlalchemy.orm import selectinload, contains_eager
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
 from core.config import settings
 from core.constants import format_ticket_id
@@ -13,22 +13,17 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 logger = logging.getLogger(__name__)
 
 async def get_active_ticket(session: AsyncSession, user_id: int, source: str) -> Ticket | None:
-    """Finds an active ticket for the user."""
-    # 1. Get user
-    result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
-    user = result.scalar_one_or_none()
+    """Finds an active ticket for the user.
     
-    if not user:
-        return None
-    
-    # 2. Find active ticket
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавляем options(selectinload(...)) ---
-    # Это сразу загрузит User и Category, чтобы не было ошибки при отправке уведомления
+    Optimized to use a single query with JOIN instead of separate queries for User and Ticket.
+    """
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.user), selectinload(Ticket.category))
+        .join(Ticket.user)
+        .options(contains_eager(Ticket.user), selectinload(Ticket.category))
         .where(
-            Ticket.user_id == user.id, 
+            User.external_id == user_id,
+            User.source == source,
             Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])
         )
         .limit(1)
