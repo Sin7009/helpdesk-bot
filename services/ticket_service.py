@@ -71,11 +71,17 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
     # 3. Calculate daily_id
     today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Count tickets created today
-    stmt = select(func.count(Ticket.id)).where(Ticket.created_at >= today_start)
-    count_result = await session.execute(stmt)
-    today_count = count_result.scalar() or 0
-    daily_id = today_count + 1
+    # Performance optimization: Find last ID instead of counting all rows (O(1) vs O(N))
+    # This also handles gaps in IDs safely.
+    stmt = (
+        select(Ticket.daily_id)
+        .where(Ticket.created_at >= today_start)
+        .order_by(desc(Ticket.created_at))
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    last_daily_id = result.scalar() or 0
+    daily_id = last_daily_id + 1
     
     # 4. Create Ticket
     active_ticket = Ticket(
