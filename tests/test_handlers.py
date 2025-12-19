@@ -49,9 +49,10 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
     # scalar_one_or_none is called twice: once for User, once for Ticket
 
     # We need to configure the side_effect on the scalar_one_or_none method of the returned Result
+    # get_active_ticket calls session.execute ONCE.
+    # So we should return the Ticket object directly (which contains the user via relationship if needed, though mocked here)
     mock_session.execute.return_value.scalar_one_or_none.side_effect = [
-        User(id=1, external_id=123, source="tg"), # User found
-        Ticket(id=1, user_id=1, status=TicketStatus.NEW) # Active ticket found
+        Ticket(id=1, daily_id=100, user_id=1, status=TicketStatus.NEW) # Active ticket found
     ]
 
     callback = AsyncMock(spec=CallbackQuery)
@@ -75,7 +76,6 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
 async def test_select_cat_no_active_ticket(mock_session, mock_state):
     # Mock active ticket check
     mock_session.execute.return_value.scalar_one_or_none.side_effect = [
-        User(id=1, external_id=123, source="tg"), # User found
         None # No active ticket
     ]
 
@@ -182,4 +182,4 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
         args, kwargs = message.answer.call_args
 
         assert "✅ <b>Заявка #999 принята!</b>" in args[0]
-        assert "Мы ответим в рабочее время" in args[0]
+        assert "Оператор ответит в рабочее время" in args[0]
