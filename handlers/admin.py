@@ -159,7 +159,14 @@ async def process_reply(bot, session, ticket_id, text, message, close=False):
         user = ticket.user # Теперь это безопасно, данные уже в памяти
         # Отправляем студенту
         try:
-            await bot.send_message(user.external_id, f"👨‍💼 <b>Ответ:</b>\n{text}", parse_mode="HTML")
+            # 🎨 Palette UX: Добавляем подсказку, как ответить
+            reply_hint = "\n\n<i>(Чтобы ответить, просто отправьте сообщение)</i>" if not close else ""
+
+            await bot.send_message(
+                user.external_id,
+                f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}",
+                parse_mode="HTML"
+            )
             
             # Сохраняем ответ Админа в историю переписки
             msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
