@@ -38,6 +38,12 @@ async def migrate():
         except Exception as e:
             logger.warning(f"closed_at column might already exist: {e}")
 
+        try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_messages_ticket_id ON messages (ticket_id)"))
+            logger.info("Added index on messages.ticket_id")
+        except Exception as e:
+            logger.warning(f"Could not create index on messages.ticket_id: {e}")
+
         # Seed categories if empty
         try:
             # We can't easily check for existence in raw SQL in a cross-DB way easily,

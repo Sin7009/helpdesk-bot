@@ -52,11 +52,12 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
         mock_ticket.daily_id = 123
         mock_get_active_ticket.return_value = mock_ticket
 
-        callback = AsyncMock(spec=CallbackQuery)
-        callback.from_user = MagicMock(spec=TgUser)
-        callback.from_user.id = 123
-        callback.data = "cat_study"
-        callback.answer = AsyncMock()
+    # We need to configure the side_effect on the scalar_one_or_none method of the returned Result
+    # get_active_ticket calls session.execute ONCE.
+    # So we should return the Ticket object directly (which contains the user via relationship if needed, though mocked here)
+    mock_session.execute.return_value.scalar_one_or_none.side_effect = [
+        Ticket(id=1, daily_id=100, user_id=1, status=TicketStatus.NEW) # Active ticket found
+    ]
 
         await select_cat(callback, mock_state, mock_session)
 
@@ -70,9 +71,10 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
 
 @pytest.mark.asyncio
 async def test_select_cat_no_active_ticket(mock_session, mock_state):
-    # Mock active ticket check via patch
-    with patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket:
-        mock_get_active_ticket.return_value = None
+    # Mock active ticket check
+    mock_session.execute.return_value.scalar_one_or_none.side_effect = [
+        None # No active ticket
+    ]
 
         callback = AsyncMock(spec=CallbackQuery)
         callback.from_user = MagicMock(spec=TgUser)
@@ -158,5 +160,4 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
         args, kwargs = message.answer.call_args
 
         assert "✅ <b>Заявка #999 принята!</b>" in args[0]
-        # Fixed assertion to match actual code text
         assert "Оператор ответит в рабочее время" in args[0]
