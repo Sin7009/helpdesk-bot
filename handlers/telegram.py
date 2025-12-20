@@ -72,7 +72,7 @@ async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
     )
 
 @router.callback_query(F.data.startswith("cat_"))
-async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     # 1. Проверка активного тикета
     active_ticket = await get_active_ticket(session, callback.from_user.id, SourceType.TELEGRAM)
     if active_ticket:
@@ -93,6 +93,24 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     # Исправлено: получаем имя категории из словаря или берем хвост строки
     category_name = cat_map.get(callback.data, "Общее")
     
+    # Проверяем, сохранил ли пользователь текст заранее (из handle_text)
+    data = await state.get_data()
+    saved_text = data.get("saved_text")
+
+    if saved_text:
+        # Если текст уже есть — сразу создаем тикет
+        t = await create_ticket(session, callback.from_user.id, SourceType.TELEGRAM, saved_text, bot, category_name, callback.from_user.full_name)
+
+        await callback.message.edit_text(
+            f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
+            f"Тема: {category_name}\n\n"
+            f"🕒 Оператор ответит в рабочее время.\n"
+            f"🔔 Вы получите уведомление об ответе.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+
     # Исправлено: используем category_name, а не несуществующую category
     await state.update_data(category=category_name)
     await state.set_state(TicketForm.waiting_text)
@@ -144,10 +162,11 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         await state.clear()
         return
 
-    # 5. Если студент пишет "Привет" без выбора меню
+    # 5. Если студент пишет сообщение без выбора меню — сохраняем его и просим выбрать тему
+    await state.update_data(saved_text=message.text)
+
     await message.answer(
-        "Ой, всё! 🤖 Я запутался в буквах.\n"
-        "Давайте лучше кнопками? Так я точно пойму, кому передать ваш вопрос.\n"
-        "Выбирайте тему ниже! 👇",
+        "Я запомнил ваш вопрос! 📝\n"
+        "Теперь выберите тему, чтобы я знал, кому его передать: 👇",
         reply_markup=get_menu_kb()
     )
