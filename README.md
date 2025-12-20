@@ -30,6 +30,9 @@
     ```ini
     TG_BOT_TOKEN=ваш_токен_телеграм
     TG_ADMIN_ID=123456789
+    TG_STAFF_CHAT_ID=-100123456789
+    # Опционально: путь к базе данных
+    # DB_NAME=/app/data/support.db
     ```
 
 ### Способ 1: Запуск через Docker (Рекомендуется)
