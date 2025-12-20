@@ -1,4 +1,5 @@
 import re
+import html
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, func
@@ -144,7 +145,10 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
                 await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
             except: pass
             
-            await callback.message.edit_text(f"{callback.message.text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
+            # Экранируем текст сообщения перед редактированием, так как используем parse_mode="HTML"
+            # и callback.message.text возвращает простой текст, который может содержать спецсимволы (<, >)
+            safe_text = html.escape(callback.message.text)
+            await callback.message.edit_text(f"{safe_text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
         else:
             await callback.answer("Тикет уже закрыт или не найден.")
 
