@@ -8,7 +8,8 @@ from handlers.admin import (
     admin_close_ticket,
     close_ticket_btn,
     add_category_cmd,
-    process_reply
+    process_reply,
+    handle_rating
 )
 from database.models import User, UserRole, Ticket, TicketStatus, Category, Message as DbMessage
 from core.config import settings
@@ -255,3 +256,185 @@ async def test_process_reply_close_ticket(mock_bot, mock_session):
 
     assert ticket.status == TicketStatus.CLOSED
     mock_session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_rating_valid(mock_bot):
+    """Test that handle_rating works correctly with valid data.
+    
+    This test ensures that ticket.user and ticket.category are accessed
+    without triggering lazy loading issues (MissingGreenlet error).
+    """
+    callback = AsyncMock(spec=CallbackQuery)
+    callback.from_user = MagicMock(spec=TgUser)
+    callback.from_user.id = 111  # Same as ticket owner
+    callback.from_user.full_name = "Test User"
+    callback.from_user.username = "testuser"
+    callback.data = "rate_123_5"
+    callback.message = AsyncMock()
+    callback.message.edit_text = AsyncMock()
+    callback.answer = AsyncMock()
+
+    # Create mock ticket with user and category pre-loaded (simulating selectinload)
+    ticket = MagicMock(spec=Ticket)
+    ticket.id = 123
+    ticket.daily_id = 1
+    ticket.rating = None  # Not rated yet
+    
+    # Mock user - must have external_id accessible
+    mock_user = MagicMock()
+    mock_user.external_id = 111  # Matches callback.from_user.id
+    ticket.user = mock_user
+    
+    # Mock category - must have name accessible
+    mock_category = MagicMock()
+    mock_category.name = "Test Category"
+    ticket.category = mock_category
+
+    mock_session = AsyncMock()
+    result_mock = MagicMock()
+    mock_session.execute.return_value = result_mock
+    result_mock.scalar_one_or_none.return_value = ticket
+
+    with patch("handlers.admin.new_session", return_value=mock_session):
+        mock_session.__aenter__.return_value = mock_session
+
+        await handle_rating(callback, mock_bot)
+
+        # Verify rating was saved
+        assert ticket.rating == 5
+        mock_session.commit.assert_called()
+        callback.message.edit_text.assert_called_once()
+        callback.answer.assert_called_with("✅ Спасибо за оценку!")
+
+
+@pytest.mark.asyncio
+async def test_handle_rating_wrong_user(mock_bot):
+    """Test that handle_rating rejects rating from non-owner."""
+    callback = AsyncMock(spec=CallbackQuery)
+    callback.from_user = MagicMock(spec=TgUser)
+    callback.from_user.id = 999  # Different from ticket owner
+    callback.data = "rate_123_5"
+    callback.answer = AsyncMock()
+
+    ticket = MagicMock(spec=Ticket)
+    ticket.id = 123
+    ticket.rating = None
+    
+    mock_user = MagicMock()
+    mock_user.external_id = 111  # Ticket owner is different
+    ticket.user = mock_user
+
+    mock_session = AsyncMock()
+    result_mock = MagicMock()
+    mock_session.execute.return_value = result_mock
+    result_mock.scalar_one_or_none.return_value = ticket
+
+    with patch("handlers.admin.new_session", return_value=mock_session):
+        mock_session.__aenter__.return_value = mock_session
+
+        await handle_rating(callback, mock_bot)
+
+        # Verify rating was not saved
+        assert ticket.rating is None
+        callback.answer.assert_called_with("❌ Это не ваша заявка", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_handle_rating_already_rated(mock_bot):
+    """Test that handle_rating rejects duplicate ratings."""
+    callback = AsyncMock(spec=CallbackQuery)
+    callback.from_user = MagicMock(spec=TgUser)
+    callback.from_user.id = 111
+    callback.data = "rate_123_5"
+    callback.answer = AsyncMock()
+
+    ticket = MagicMock(spec=Ticket)
+    ticket.id = 123
+    ticket.rating = 3  # Already rated
+    
+    mock_user = MagicMock()
+    mock_user.external_id = 111
+    ticket.user = mock_user
+
+    mock_session = AsyncMock()
+    result_mock = MagicMock()
+    mock_session.execute.return_value = result_mock
+    result_mock.scalar_one_or_none.return_value = ticket
+
+    with patch("handlers.admin.new_session", return_value=mock_session):
+        mock_session.__aenter__.return_value = mock_session
+
+        await handle_rating(callback, mock_bot)
+
+        # Verify rating was not changed
+        assert ticket.rating == 3
+        callback.answer.assert_called_with("Вы уже оценили эту заявку", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_handle_rating_ticket_not_found(mock_bot):
+    """Test handle_rating when ticket doesn't exist."""
+    callback = AsyncMock(spec=CallbackQuery)
+    callback.from_user = MagicMock(spec=TgUser)
+    callback.from_user.id = 111
+    callback.data = "rate_999_5"
+    callback.answer = AsyncMock()
+
+    mock_session = AsyncMock()
+    result_mock = MagicMock()
+    mock_session.execute.return_value = result_mock
+    result_mock.scalar_one_or_none.return_value = None  # Ticket not found
+
+    with patch("handlers.admin.new_session", return_value=mock_session):
+        mock_session.__aenter__.return_value = mock_session
+
+        await handle_rating(callback, mock_bot)
+
+        callback.answer.assert_called_with("❌ Заявка не найдена", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_handle_rating_low_rating_notifies_admin(mock_bot):
+    """Test that low ratings (1-2) notify the admin."""
+    callback = AsyncMock(spec=CallbackQuery)
+    callback.from_user = MagicMock(spec=TgUser)
+    callback.from_user.id = 111
+    callback.from_user.full_name = "Test User"
+    callback.from_user.username = "testuser"
+    callback.data = "rate_123_2"  # Low rating
+    callback.message = AsyncMock()
+    callback.message.edit_text = AsyncMock()
+    callback.answer = AsyncMock()
+
+    ticket = MagicMock(spec=Ticket)
+    ticket.id = 123
+    ticket.daily_id = 1
+    ticket.rating = None
+    
+    mock_user = MagicMock()
+    mock_user.external_id = 111
+    ticket.user = mock_user
+    
+    mock_category = MagicMock()
+    mock_category.name = "Test Category"
+    ticket.category = mock_category
+
+    mock_session = AsyncMock()
+    result_mock = MagicMock()
+    mock_session.execute.return_value = result_mock
+    result_mock.scalar_one_or_none.return_value = ticket
+
+    with patch("handlers.admin.new_session", return_value=mock_session):
+        mock_session.__aenter__.return_value = mock_session
+
+        await handle_rating(callback, mock_bot)
+
+        # Verify rating was saved
+        assert ticket.rating == 2
+        
+        # Verify admin was notified about low rating
+        mock_bot.send_message.assert_called_once()
+        call_args = mock_bot.send_message.call_args
+        assert call_args[0][0] == settings.TG_ADMIN_ID
+        assert "⚠️ Низкая оценка" in call_args[0][1]
