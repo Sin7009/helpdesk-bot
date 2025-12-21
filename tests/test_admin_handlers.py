@@ -128,6 +128,7 @@ async def test_close_ticket_btn_valid(mock_bot):
     callback.from_user.id = settings.TG_ADMIN_ID
     callback.data = "close_123"
     callback.message = AsyncMock()
+    callback.message.text = "Sample ticket text"  # Set text as a regular property, not a coroutine
     callback.message.edit_text = AsyncMock()
     callback.answer = AsyncMock()
 

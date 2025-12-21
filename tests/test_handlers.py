@@ -63,8 +63,10 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
         callback.from_user = MagicMock(spec=TgUser)
         callback.from_user.id = 123
         callback.answer = AsyncMock()
+        
+        mock_bot = AsyncMock()
 
-        await select_cat(callback, mock_state, mock_session)
+        await select_cat(callback, mock_state, mock_session, mock_bot)
 
         # Updated assertion for UX improvement
         args, kwargs = callback.answer.call_args
@@ -90,8 +92,10 @@ async def test_select_cat_no_active_ticket(mock_session, mock_state):
         callback.data = "cat_study"
         callback.message = AsyncMock(spec=Message)
         callback.message.edit_text = AsyncMock()
+        
+        mock_bot = AsyncMock()
 
-        await select_cat(callback, mock_state, mock_session)
+        await select_cat(callback, mock_state, mock_session, mock_bot)
 
         mock_state.update_data.assert_called_with(category="Учеба")
         mock_state.set_state.assert_called_with(TicketForm.waiting_text)
