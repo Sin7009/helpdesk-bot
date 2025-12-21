@@ -41,7 +41,41 @@ async def get_user_history(session: AsyncSession, user_id: int) -> list[Ticket]:
     )
     return result.scalars().all()
 
-async def create_ticket(session: AsyncSession, user_id: int, source: str, text: str, bot: Bot, category_name: str, user_full_name: str = "Unknown"):
+async def create_ticket(
+    session: AsyncSession,
+    user_id: int,
+    source: str,
+    text: str,
+    bot: Bot,
+    category_name: str,
+    user_full_name: str = "Unknown"
+) -> Ticket:
+    """Create a new ticket for a user.
+    
+    Args:
+        session: Database session
+        user_id: External user ID (Telegram ID)
+        source: Source platform ('tg' or 'vk')
+        text: Question text
+        bot: Bot instance for notifications
+        category_name: Category name for the ticket
+        user_full_name: User's full name (default: "Unknown")
+        
+    Returns:
+        The created Ticket object
+        
+    Raises:
+        ValueError: If text is empty or too long
+    """
+    # Validate inputs
+    if not text or not text.strip():
+        raise ValueError("Question text cannot be empty")
+    
+    if len(text) > 10000:  # Reasonable limit for ticket text
+        raise ValueError("Question text is too long (max 10000 characters)")
+    
+    text = text.strip()
+    
     # 1. Find or create user
     result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
     user = result.scalar_one_or_none()

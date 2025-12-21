@@ -1,3 +1,4 @@
+import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.models import Base
 from core.config import settings
@@ -5,7 +6,9 @@ from core.config import settings
 # Используем путь из конфига (важно для Docker volume)
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.DB_NAME}"
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+# Echo SQL queries only in development (when DEBUG env var is set)
+DEBUG_MODE = os.getenv("DEBUG", "false").lower() == "true"
+engine = create_async_engine(DATABASE_URL, echo=DEBUG_MODE)
 
 # ВАЖНО: Называем переменную new_session, чтобы handlers.telegram мог её найти
 new_session = async_sessionmaker(
