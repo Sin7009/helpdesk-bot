@@ -28,7 +28,11 @@ async def test_session(test_engine):
 @pytest.mark.asyncio
 async def test_ticket_flow(test_session):
     # Mock Bot
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
 
     # 1. Test create ticket
     # This automatically handles user creation if needed in updated logic
