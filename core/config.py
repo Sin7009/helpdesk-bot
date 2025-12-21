@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     
     # OpenRouter API key for LLM-based ticket summarization
     OPENROUTER_API_KEY: str = ""
+    
+    # Model name for summarization (default per your request)
+    LLM_MODEL_NAME: str = "google/gemini-3-flash-preview"
 
     model_config = SettingsConfigDict(
         env_file=".env",

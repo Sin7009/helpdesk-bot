@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from services.llm_service import LLMService
 from database.models import Message, SenderRole
 from datetime import datetime
+from core.config import settings
 
 
 @pytest.fixture
@@ -198,3 +199,77 @@ async def test_generate_summary_with_special_characters():
             result = await LLMService.generate_summary(dialogue_with_special_chars)
             
             assert result == "Проблема со скриптом. Решена."
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_unexpected_response_format():
+    """Test summary generation when API returns unexpected response format."""
+    # Response without 'choices' key
+    mock_response_data = {
+        'error': {
+            'message': 'Invalid model'
+        }
+    }
+    
+    with patch("services.llm_service.settings") as mock_settings:
+        mock_settings.OPENROUTER_API_KEY = "test-key"
+        
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            # Create mock response
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value=mock_response_data)
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+            
+            # Create mock session
+            mock_session = MagicMock()
+            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            
+            mock_session_class.return_value = mock_session
+            
+            result = await LLMService.generate_summary("Test dialogue")
+            
+            assert result == "Ошибка формата ответа ИИ."
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_empty_choices():
+    """Test summary generation when API returns empty choices array."""
+    mock_response_data = {
+        'choices': []
+    }
+    
+    with patch("services.llm_service.settings") as mock_settings:
+        mock_settings.OPENROUTER_API_KEY = "test-key"
+        
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            # Create mock response
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.json = AsyncMock(return_value=mock_response_data)
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+            
+            # Create mock session
+            mock_session = MagicMock()
+            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            
+            mock_session_class.return_value = mock_session
+            
+            result = await LLMService.generate_summary("Test dialogue")
+            
+            assert result == "Ошибка формата ответа ИИ."
+
+
+def test_llm_model_name_from_settings():
+    """Test that LLM model name is loaded from settings."""
+    # The MODEL attribute should be set from settings
+    assert LLMService.MODEL == settings.LLM_MODEL_NAME
+    # Verify default value is as expected
+    assert settings.LLM_MODEL_NAME == "google/gemini-3-flash-preview"
+
