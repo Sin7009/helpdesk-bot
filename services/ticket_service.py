@@ -178,7 +178,8 @@ async def _send_staff_notification(
     if history_text and len(history_text) > 2000:
         history_text = history_text[:2000] + "...(truncated)"
 
-    safe_history = html.escape(history_text) if history_text else ""
+    # history_text is already HTML-escaped by the caller (create_ticket)
+    safe_history = history_text if history_text else ""
 
     # Calculate metadata length (headers, footers, etc.)
     # We construct a dummy message without the variable text to measure overhead
