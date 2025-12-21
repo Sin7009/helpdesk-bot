@@ -219,7 +219,7 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             await callback.answer("У вас нет прав.", show_alert=True)
             return
 
-        t_id = int(callback.data.split("_")[1])
+        t_id = int(callback.data.split("_")[-1])
         # Use selectinload to fetch user eagerly for notification
         stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == t_id)
         result = await session.execute(stmt)
