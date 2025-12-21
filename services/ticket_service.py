@@ -224,16 +224,29 @@ async def _send_staff_notification(
     priority_text = get_priority_text(ticket.priority)
     
     # Add student info if available
-    student_info = ""
-    if user.student_id or user.department or user.course:
-        parts = []
-        if user.student_id:
-            parts.append(f"ID: {user.student_id}")
-        if user.course:
-            parts.append(f"{user.course} курс")
-        if user.department:
-            parts.append(html.escape(user.department))
-        student_info = f"\n🎓 {', '.join(parts)}"
+
+    # Формируем иконку статуса
+    status_icon = "⭐ СТАРОСТА" if user.is_head_student else "🎓 Студент"
+
+    # Собираем инфостроку
+    user_meta = [
+        f"{user.course} курс" if user.course else None,
+        f"Группа {user.group_number}" if user.group_number else None,
+        user.department # Если есть
+    ]
+    # Убираем пустые значения и склеиваем
+    meta_str = " | ".join(filter(None, user_meta))
+
+    # Old student_info logic is replaced by the new header format
+    # But wait, template_start uses student_info.
+    # The requirement says:
+    # template_start = (
+    #    f"{header}\n"
+    #    f"👤 <b>{safe_user_name}</b>\n"
+    #    f"📋 {status_icon} | {meta_str}\n"
+    #    f"Тема: {category_text}\n\n"
+    # )
+    # So I need to restructure the template construction below.
     
     if is_new_ticket:
         dummy_header = f"{priority_emoji} <b>Новый запрос №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
@@ -244,7 +257,8 @@ async def _send_staff_notification(
 
     template_start = (
         f"{dummy_header}\n"
-        f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>{student_info}\n"
+        f"👤 <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
+        f"📋 {status_icon} | {meta_str}\n"
         f"Тема: {category_text} | Приоритет: {priority_text}\n"
         f"Текст: "
     )
