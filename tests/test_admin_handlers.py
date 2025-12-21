@@ -17,6 +17,10 @@ from core.config import settings
 def mock_bot():
     bot = AsyncMock()
     bot.get_me.return_value = MagicMock(id=999) # Bot ID
+    # Configure send_message to return a message with an integer message_id
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
     return bot
 
 @pytest.fixture
@@ -41,6 +45,7 @@ async def test_admin_reply_native_valid(mock_bot, mock_session):
     message.reply_to_message.from_user = MagicMock(spec=TgUser)
     message.reply_to_message.from_user.id = 999 # From bot
     message.reply_to_message.text = "Question ID: #123"
+    message.reply_to_message.message_id = 54321  # Add message_id attribute
     message.text = "Answer"
 
     # Mock ticket found
@@ -55,7 +60,8 @@ async def test_admin_reply_native_valid(mock_bot, mock_session):
     with patch("handlers.admin.process_reply", new_callable=AsyncMock) as mock_process:
         await admin_reply_native(message, mock_bot, mock_session)
 
-        mock_process.assert_called_with(mock_bot, mock_session, 123, "Answer", message, close=False)
+        # The actual call includes ticket_obj parameter
+        mock_process.assert_called_with(mock_bot, mock_session, 123, "Answer", message, close=False, ticket_obj=ticket)
 
 @pytest.mark.asyncio
 async def test_admin_reply_native_ignore_user_reply(mock_bot, mock_session):

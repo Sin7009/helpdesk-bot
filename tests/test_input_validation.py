@@ -81,7 +81,11 @@ async def test_create_ticket_too_long(test_session):
 @pytest.mark.asyncio
 async def test_create_ticket_strips_whitespace(test_session):
     """Test that ticket text is properly stripped of leading/trailing whitespace."""
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
     
     ticket = await create_ticket(
         test_session,
@@ -99,7 +103,11 @@ async def test_create_ticket_strips_whitespace(test_session):
 @pytest.mark.asyncio
 async def test_create_ticket_valid_at_max_length(test_session):
     """Test that creating a ticket at exactly max length works."""
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
     
     # Create a text exactly 10000 characters
     max_length_text = "x" * 10000
