@@ -133,7 +133,7 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         ])
 
         # Notify staff chat
-        await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+        await _send_staff_notification(bot, active_ticket, user, text, history_text, is_new_ticket=True)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff: {e}")
 
@@ -149,23 +149,83 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
     try:
         # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
         user = ticket.user
-        category = ticket.category
-        safe_user_name = html.escape(user.full_name or "Пользователь")
-        safe_text = html.escape(text) # <--- SANITIZATION ADDED
-
-        admin_text = (
-            f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})\n"
-            f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
-            f"Тема: {category.name if category else 'General'}\n"
-            f"Текст: {safe_text}\n\n"
-            f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
-        )
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
-        ])
-                
-        # Notify staff chat
-        await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+        await _send_staff_notification(bot, ticket, user, text, is_new_ticket=False)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff about new message: {e}")
+
+
+async def _send_staff_notification(
+    bot: Bot,
+    ticket: Ticket,
+    user: User,
+    text: str,
+    history_text: str = None,
+    is_new_ticket: bool = False
+):
+    """
+    Helper function to send notifications to staff.
+    Handles message construction, HTML escaping, and truncation of long messages.
+    """
+    MAX_MESSAGE_LENGTH = 4096
+
+    category_name = ticket.category.name if ticket.category else "General"
+    category_text = html.escape(category_name)
+    safe_user_name = html.escape(user.full_name or "Пользователь")
+
+    # Prepare history part
+    # Truncate raw history first if it's too long, to avoid slicing escaped entities later
+    # 2000 chars of history is generous enough
+    if history_text and len(history_text) > 2000:
+        history_text = history_text[:2000] + "...(truncated)"
+
+    safe_history = html.escape(history_text) if history_text else ""
+
+    # Calculate metadata length (headers, footers, etc.)
+    # We construct a dummy message without the variable text to measure overhead
+    if is_new_ticket:
+        dummy_header = f"🔥 <b>Новый запрос №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
+        history_block = f"\n\n<i>История:</i>\n{safe_history}" if safe_history else ""
+    else:
+        dummy_header = f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
+        history_block = ""
+
+    template_start = (
+        f"{dummy_header}\n"
+        f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
+        f"Тема: {category_text}\n"
+        f"Текст: "
+    )
+    template_end = (
+        f"{history_block}\n\n"
+        f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
+    )
+
+    metadata_len = len(template_start) + len(template_end)
+    available_for_text = MAX_MESSAGE_LENGTH - metadata_len
+
+    # Safety buffer
+    available_for_text -= 100
+
+    if available_for_text < 100:
+        # If history is massive (should be rare due to pre-truncation), prioritize current text
+        available_for_text = 2000
+
+    # Truncate user text if necessary
+    if len(text) > available_for_text:
+        display_text = text[:available_for_text] + "... (truncated)"
+    else:
+        display_text = text
+
+    safe_text = html.escape(display_text)
+
+    admin_text = f"{template_start}{safe_text}{template_end}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
+    ])
+
+    # Final safety check
+    # We trust our calculation above. If it's still too long, we let it fail (better than sending broken HTML)
+    # or we could try to truncate intelligently again, but simple hard slice is dangerous for HTML.
+
+    await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)

@@ -44,7 +44,7 @@ async def test_cmd_start(mock_state):
     assert "Привет, TestUser" in message.answer.call_args[0][0]
 
 @pytest.mark.asyncio
-async def test_select_cat_active_ticket(mock_session, mock_state):
+async def test_select_cat_active_ticket(mock_session, mock_state, mock_bot):
     # Mock active ticket check via patch because it's a helper function
     with patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket:
         # User has an active ticket
@@ -77,7 +77,7 @@ async def test_select_cat_active_ticket(mock_session, mock_state):
         mock_state.set_state.assert_not_called()
 
 @pytest.mark.asyncio
-async def test_select_cat_no_active_ticket(mock_session, mock_state):
+async def test_select_cat_no_active_ticket(mock_session, mock_state, mock_bot):
     # Mock active ticket check
     mock_session.execute.return_value.scalar_one_or_none.side_effect = [
         None # No active ticket

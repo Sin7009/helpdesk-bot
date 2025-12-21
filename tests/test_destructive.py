@@ -26,12 +26,13 @@ async def test_session(test_engine):
         yield session
 
 @pytest.mark.asyncio
-async def test_create_ticket_silent_notification_failure_on_large_payload(test_session):
+async def test_create_ticket_handles_large_payload_safely(test_session):
     """
-    Destructive Test: Verifies that 'create_ticket' silently swallows exceptions
-    during admin notification (e.g., when message text is too long for Telegram API).
+    Verified Fix: Ensures that excessively long messages are TRUNCATED
+    before sending to admin, preventing silent failures.
 
-    Vulnerability: The user is told the ticket is created, but the admin never receives it.
+    Previously: Messages > 4096 chars caused exceptions which were swallowed.
+    Now: Messages are truncated to be safe.
     """
 
     # Mock Bot
@@ -68,18 +69,17 @@ async def test_create_ticket_silent_notification_failure_on_large_payload(test_s
     assert ticket is not None
     assert ticket.id is not None
 
-    # 2. The admin notification FAILED (Mock side effect triggered)
-    # We verify bot.send_message was called with the large text
+    # 2. The admin notification SUCCEEDED (Mock side effect NOT triggered)
+    # We verify bot.send_message was called with a SAFE text length
     assert bot.send_message.called
     call_args = bot.send_message.call_args
-    # The first argument is chat_id, second is text.
-    # Depending on how it's called (args vs kwargs).
-    # In code: await bot.send_message(settings.TG_ADMIN_ID, admin_text, ...)
-    assert len(call_args.args[1]) > 4096
+    sent_text = call_args.args[1]
 
-    # 3. The logic SWALLOWED the exception (Function did not crash)
-    # This confirms the "silent failure" vulnerability.
-    # Admin is unaware of this new ticket.
+    # Assert length is safe
+    assert len(sent_text) <= 4096
+
+    # Assert truncation happened
+    assert "... (truncated)" in sent_text or "...(limit)" in sent_text
 
 @pytest.mark.asyncio
 async def test_create_ticket_handles_unescaped_html_input(test_session):

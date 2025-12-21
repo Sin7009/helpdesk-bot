@@ -147,8 +147,24 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             
             # Экранируем текст сообщения перед редактированием, так как используем parse_mode="HTML"
             # и callback.message.text возвращает простой текст, который может содержать спецсимволы (<, >)
-            safe_text = html.escape(callback.message.text)
-            await callback.message.edit_text(f"{safe_text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
+            original_text = callback.message.text
+
+            if original_text:
+                safe_text = html.escape(original_text)
+                await callback.message.edit_text(f"{safe_text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
+            elif callback.message.caption:
+                # Если это медиа с подписью, мы не можем превратить его в текст через edit_text
+                # Лучше просто удалить кнопки (edit_reply_markup) и отправить новое сообщение, или оставить как есть
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.message.reply("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
+            else:
+                # Если ничего нет (странно), просто пишем ответ
+                await callback.message.answer("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
+                # И убираем кнопки
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except:
+                    pass
         else:
             await callback.answer("Тикет уже закрыт или не найден.")
 
