@@ -6,6 +6,24 @@ from sqlalchemy import text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ==========================================
+# ⚠️  DEPRECATION NOTICE
+# ==========================================
+# This script is DEPRECATED and will be removed in a future version.
+# 
+# Please use Alembic for database migrations instead:
+#   alembic upgrade head
+#
+# See ALEMBIC_GUIDE.md for migration instructions.
+# ==========================================
+
+logger.warning("=" * 60)
+logger.warning("⚠️  DEPRECATION WARNING")
+logger.warning("This migrate_db.py script is deprecated!")
+logger.warning("Please use Alembic instead: alembic upgrade head")
+logger.warning("See ALEMBIC_GUIDE.md for details")
+logger.warning("=" * 60)
+
 async def migrate():
     logger.info("Starting migration...")
     async with engine.begin() as conn:

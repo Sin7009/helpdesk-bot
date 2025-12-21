@@ -1,4 +1,8 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Base directory for flexible path resolution
+BASE_DIR = Path(__file__).parent.parent
 
 class Settings(BaseSettings):
     # Имена переменных должны точно совпадать с тем, что в .env (капсом)
@@ -7,7 +11,9 @@ class Settings(BaseSettings):
     TG_STAFF_CHAT_ID: int
 
     # Добавляем базу данных с дефолтным значением
-    DB_NAME: str = "/app/data/support.db"
+    # Используем относительный путь для локальной разработки
+    # Docker volume override это значение через .env
+    DB_NAME: str = str(BASE_DIR / "support.db")
 
     model_config = SettingsConfigDict(
         env_file=".env",
