@@ -10,6 +10,7 @@ from database.setup import new_session
 from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +152,28 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
             ticket.closed_at = func.now()
             await session.commit()
 
-            # Try notify user
+            # Try notify user with rating request
             try:
-                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
-            except: pass
+                rating_kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="⭐", callback_data=f"rate_{ticket.id}_1"),
+                        InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{ticket.id}_2"),
+                        InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{ticket.id}_3")
+                    ],
+                    [
+                        InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_4"),
+                        InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_5")
+                    ]
+                ])
+                await bot.send_message(
+                    ticket.user.external_id,
+                    "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
+                    "Пожалуйста, оцените качество помощи:",
+                    parse_mode="HTML",
+                    reply_markup=rating_kb
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send rating request to user {ticket.user.external_id}: {e}")
 
             await message.answer(f"Тикет #{t_id} закрыт.")
         else:
@@ -180,10 +199,28 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
             ticket.closed_at = func.now()
             await session.commit()
             
-            # Уведомляем студента
+            # Уведомляем студента с запросом оценки
             try:
-                await bot.send_message(ticket.user.external_id, "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>", parse_mode="HTML")
-            except: pass
+                rating_kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="⭐", callback_data=f"rate_{ticket.id}_1"),
+                        InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{ticket.id}_2"),
+                        InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{ticket.id}_3")
+                    ],
+                    [
+                        InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_4"),
+                        InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_5")
+                    ]
+                ])
+                await bot.send_message(
+                    ticket.user.external_id,
+                    "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
+                    "Пожалуйста, оцените качество помощи:",
+                    parse_mode="HTML",
+                    reply_markup=rating_kb
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send rating request to user {ticket.user.external_id}: {e}")
             
             # Экранируем текст сообщения перед редактированием, так как используем parse_mode="HTML"
             # и callback.message.text возвращает простой текст, который может содержать спецсимволы (<, >)
@@ -263,6 +300,10 @@ async def process_reply(
         msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
         session.add(msg)
         
+        # Track first response time (SLA metric)
+        if ticket.first_response_at is None:
+            ticket.first_response_at = func.now()
+        
         status_msg = "Ответ отправлен."
         if close:
             ticket.status = TicketStatus.CLOSED
@@ -278,3 +319,78 @@ async def process_reply(
     except Exception as e:
         logger.error(f"Failed to send reply to user {user.external_id}: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка отправки: {e}")
+
+# --- RATING HANDLER (Student satisfaction) ---
+
+@router.callback_query(F.data.startswith("rate_"))
+async def handle_rating(callback: types.CallbackQuery, bot: Bot):
+    """Handle student satisfaction rating for closed tickets."""
+    async with new_session() as session:
+        try:
+            # Parse callback data: rate_{ticket_id}_{rating}
+            parts = callback.data.split("_")
+            if len(parts) != 3:
+                await callback.answer("❌ Ошибка формата данных")
+                return
+            
+            ticket_id = int(parts[1])
+            rating = int(parts[2])
+            
+            if rating < 1 or rating > 5:
+                await callback.answer("❌ Неверная оценка")
+                return
+            
+            # Get ticket
+            stmt = select(Ticket).where(Ticket.id == ticket_id)
+            result = await session.execute(stmt)
+            ticket = result.scalar_one_or_none()
+            
+            if not ticket:
+                await callback.answer("❌ Заявка не найдена", show_alert=True)
+                return
+            
+            # Verify this is the ticket owner
+            if ticket.user.external_id != callback.from_user.id:
+                await callback.answer("❌ Это не ваша заявка", show_alert=True)
+                return
+            
+            # Check if already rated
+            if ticket.rating is not None:
+                await callback.answer("Вы уже оценили эту заявку", show_alert=True)
+                return
+            
+            # Save rating
+            ticket.rating = rating
+            await session.commit()
+            
+            # Update message to show rating received
+            stars = "⭐" * rating
+            await callback.message.edit_text(
+                f"✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
+                f"Спасибо за оценку: {stars}\n"
+                f"<i>Ваш отзыв поможет нам улучшить качество поддержки!</i>",
+                parse_mode="HTML"
+            )
+            
+            await callback.answer("✅ Спасибо за оценку!")
+            
+            # Notify admin about the rating (optional)
+            try:
+                if rating <= 2:
+                    # Low rating - notify admin
+                    await bot.send_message(
+                        settings.TG_ADMIN_ID,
+                        f"⚠️ Низкая оценка ({stars}) для тикета #{ticket.daily_id} (ID: #{ticket.id})\n"
+                        f"Студент: {callback.from_user.full_name or callback.from_user.username}\n"
+                        f"Тема: {ticket.category.name if ticket.category else 'N/A'}",
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to notify admin about low rating: {e}")
+                
+        except ValueError as e:
+            logger.error(f"Invalid rating data: {callback.data}, error: {e}")
+            await callback.answer("❌ Ошибка обработки оценки")
+        except Exception as e:
+            logger.error(f"Error processing rating: {e}", exc_info=True)
+            await callback.answer("❌ Ошибка при сохранении оценки")

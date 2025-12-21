@@ -4,9 +4,10 @@ import html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload, contains_eager
-from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category
+from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority
 from core.config import settings
 from core.constants import format_ticket_id
+from services.priority_service import detect_priority, get_priority_emoji, get_priority_text
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -133,6 +134,9 @@ async def create_ticket(
     last_daily_id = result.scalar_one_or_none()
     daily_id = (last_daily_id or 0) + 1
     
+    # 3.5. Detect priority automatically
+    priority = detect_priority(text, category_name)
+    
     # 4. Create Ticket
     active_ticket = Ticket(
         user_id=user.id,
@@ -140,7 +144,8 @@ async def create_ticket(
         category_id=category.id,
         source=source,
         question_text=text, # Initial question text
-        status=TicketStatus.NEW
+        status=TicketStatus.NEW,
+        priority=priority
     )
     session.add(active_ticket)
     await session.flush()
@@ -253,8 +258,23 @@ async def _send_staff_notification(
 
     # Calculate metadata length (headers, footers, etc.)
     # We construct a dummy message without the variable text to measure overhead
+    priority_emoji = get_priority_emoji(ticket.priority)
+    priority_text = get_priority_text(ticket.priority)
+    
+    # Add student info if available
+    student_info = ""
+    if user.student_id or user.department or user.course:
+        parts = []
+        if user.student_id:
+            parts.append(f"ID: {user.student_id}")
+        if user.course:
+            parts.append(f"{user.course} курс")
+        if user.department:
+            parts.append(html.escape(user.department))
+        student_info = f"\n🎓 {', '.join(parts)}"
+    
     if is_new_ticket:
-        dummy_header = f"🔥 <b>Новый запрос №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
+        dummy_header = f"{priority_emoji} <b>Новый запрос №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
         history_block = f"\n\n<i>История:</i>\n{safe_history}" if safe_history else ""
     else:
         dummy_header = f"📩 <b>Новое сообщение в тикете №{ticket.daily_id}</b> ({format_ticket_id(ticket.id)})"
@@ -262,8 +282,8 @@ async def _send_staff_notification(
 
     template_start = (
         f"{dummy_header}\n"
-        f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>\n"
-        f"Тема: {category_text}\n"
+        f"От: <a href='tg://user?id={user.external_id}'>{safe_user_name}</a>{student_info}\n"
+        f"Тема: {category_text} | Приоритет: {priority_text}\n"
         f"Текст: "
     )
     template_end = (
