@@ -18,6 +18,11 @@ router = Router()
 class TicketForm(StatesGroup):
     waiting_text = State()
 
+class ProfileForm(StatesGroup):
+    waiting_student_id = State()
+    waiting_department = State()
+    waiting_course = State()
+
 # --- КЛАВИАТУРЫ ---
 # (Оставляем пока хардкод для надежности, раз вы его вернули)
 def get_menu_kb():
@@ -170,3 +175,151 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         "Теперь выберите тему, чтобы я знал, кому его передать: 👇",
         reply_markup=get_menu_kb()
     )
+
+# --- ПРОФИЛЬ СТУДЕНТА ---
+
+@router.message(Command("myprofile"))
+async def cmd_myprofile(message: types.Message, session: AsyncSession):
+    """Show current student profile information."""
+    result = await session.execute(
+        select(User).where(
+            User.external_id == message.from_user.id,
+            User.source == SourceType.TELEGRAM
+        ).limit(1)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        await message.answer(
+            "Ваш профиль еще не создан. Создайте первую заявку, чтобы начать!\n"
+            "Используйте /start"
+        )
+        return
+    
+    # Format profile information
+    profile_lines = [
+        "👤 <b>Ваш профиль:</b>\n",
+        f"Имя: {user.full_name or 'Не указано'}"
+    ]
+    
+    if user.student_id:
+        profile_lines.append(f"Студ. билет: {user.student_id}")
+    else:
+        profile_lines.append("Студ. билет: <i>не указан</i>")
+    
+    if user.course:
+        profile_lines.append(f"Курс: {user.course}")
+    else:
+        profile_lines.append("Курс: <i>не указан</i>")
+    
+    if user.department:
+        profile_lines.append(f"Факультет/Институт: {user.department}")
+    else:
+        profile_lines.append("Факультет/Институт: <i>не указан</i>")
+    
+    profile_lines.append("\n<i>Для обновления профиля используйте /updateprofile</i>")
+    
+    await message.answer(
+        "\n".join(profile_lines),
+        parse_mode="HTML"
+    )
+
+@router.message(Command("updateprofile"))
+async def cmd_updateprofile(message: types.Message, state: FSMContext, session: AsyncSession):
+    """Start profile update process."""
+    # Ensure user exists
+    result = await session.execute(
+        select(User).where(
+            User.external_id == message.from_user.id,
+            User.source == SourceType.TELEGRAM
+        ).limit(1)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        await message.answer(
+            "Ваш профиль еще не создан. Создайте первую заявку, чтобы начать!\n"
+            "Используйте /start"
+        )
+        return
+    
+    await state.set_state(ProfileForm.waiting_student_id)
+    await message.answer(
+        "📝 <b>Обновление профиля</b>\n\n"
+        "Введите номер студенческого билета (или '-' чтобы пропустить):",
+        parse_mode="HTML"
+    )
+
+@router.message(ProfileForm.waiting_student_id)
+async def process_student_id(message: types.Message, state: FSMContext):
+    """Process student ID input."""
+    student_id = message.text.strip()
+    if student_id == '-':
+        student_id = None
+    
+    await state.update_data(student_id=student_id)
+    await state.set_state(ProfileForm.waiting_course)
+    await message.answer(
+        "Введите ваш курс (1-6) или '-' чтобы пропустить:"
+    )
+
+@router.message(ProfileForm.waiting_course)
+async def process_course(message: types.Message, state: FSMContext):
+    """Process course input."""
+    course_text = message.text.strip()
+    course = None
+    
+    if course_text != '-':
+        try:
+            course = int(course_text)
+            if course < 1 or course > 6:
+                await message.answer("❌ Курс должен быть от 1 до 6. Попробуйте еще раз:")
+                return
+        except ValueError:
+            await message.answer("❌ Введите число от 1 до 6, или '-' чтобы пропустить:")
+            return
+    
+    await state.update_data(course=course)
+    await state.set_state(ProfileForm.waiting_department)
+    await message.answer(
+        "Введите название вашего факультета/института (или '-' чтобы пропустить):"
+    )
+
+@router.message(ProfileForm.waiting_department)
+async def process_department(message: types.Message, state: FSMContext, session: AsyncSession):
+    """Process department input and save profile."""
+    department = message.text.strip()
+    if department == '-':
+        department = None
+    
+    # Get all collected data
+    data = await state.get_data()
+    student_id = data.get('student_id')
+    course = data.get('course')
+    
+    # Update user profile
+    result = await session.execute(
+        select(User).where(
+            User.external_id == message.from_user.id,
+            User.source == SourceType.TELEGRAM
+        ).limit(1)
+    )
+    user = result.scalar_one_or_none()
+    
+    if user:
+        user.student_id = student_id
+        user.course = course
+        user.department = department
+        await session.commit()
+        
+        await message.answer(
+            "✅ <b>Профиль успешно обновлен!</b>\n\n"
+            "Теперь сотрудники поддержки будут видеть вашу информацию при обработке заявок.\n"
+            "Используйте /myprofile чтобы посмотреть ваш профиль.",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("❌ Ошибка при обновлении профиля. Попробуйте позже.")
+    
+    await state.clear()
+

@@ -52,7 +52,7 @@ async def test_send_daily_statistics_empty_db():
     # Check that the message contains statistics
     assert "Статистика за" in message_text
     assert "Всего запросов: 0" in message_text
-    assert "Закрыто (Отвечено): 0" in message_text
+    assert "Закрыто: 0" in message_text
     assert "Нет данных" in message_text or "Топ тем:" in message_text
     assert kwargs['parse_mode'] == "HTML"
 
@@ -121,7 +121,7 @@ async def test_send_daily_statistics_with_data(test_session):
     # Check that the message contains correct statistics
     assert "Статистика за" in message_text
     assert "Всего запросов: 3" in message_text
-    assert "Закрыто (Отвечено): 1" in message_text
+    assert "Закрыто: 1" in message_text
     assert "Топ тем:" in message_text
     # Should show IT first (2 tickets) then Общежитие (1 ticket)
     assert "IT: 2" in message_text
@@ -209,4 +209,4 @@ async def test_send_daily_statistics_excludes_old_tickets(test_session):
     
     # Should only count 1 ticket created today, 0 closed today
     assert "Всего запросов: 1" in message_text
-    assert "Закрыто (Отвечено): 0" in message_text
+    assert "Закрыто: 0" in message_text

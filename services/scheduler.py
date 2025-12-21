@@ -3,7 +3,7 @@ import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, func, and_
 from database.setup import new_session
-from database.models import Ticket, Category
+from database.models import Ticket, Category, TicketPriority
 from core.config import settings
 from aiogram import Bot
 
@@ -13,7 +13,8 @@ async def send_daily_statistics(bot: Bot):
     """Send daily statistics report to admin.
     
     Collects and sends statistics about tickets created and closed today,
-    including top categories by ticket count.
+    including top categories by ticket count, priority distribution,
+    average response time, and student satisfaction ratings.
     
     Args:
         bot: The Bot instance for sending messages.
@@ -31,21 +32,59 @@ async def send_daily_statistics(bot: Bot):
             )
             total_requests = (await session.execute(stmt_total)).scalar() or 0
 
-            # Total answered (Closed?) - Prompt says "Отвечено: M".
-            # Assuming "Answered" means closed or admin replied?
-            # Usually statistics mean Closed or maybe just tickets with Admin replies.
-            # Let's count Closed tickets for now as "resolved/answered" proxy or checking messages.
-            # But easier: Closed tickets today.
-            # Or tickets created today that are closed?
-            # Let's count tickets Closed today.
-
+            # Total closed today
             stmt_closed = select(func.count(Ticket.id)).where(
                  and_(Ticket.closed_at >= today_start, Ticket.closed_at < today_end)
             )
-            # OR: "Отвечено" might mean tickets where admin sent a message.
-            # Let's stick to "Closed" or just "Total processed".
-            # The example says "Отвечено: M". I'll assume Closed.
             closed_requests = (await session.execute(stmt_closed)).scalar() or 0
+            
+            # Priority distribution
+            priority_stats = {}
+            for priority in TicketPriority:
+                stmt_priority = select(func.count(Ticket.id)).where(
+                    and_(
+                        Ticket.created_at >= today_start,
+                        Ticket.created_at < today_end,
+                        Ticket.priority == priority
+                    )
+                )
+                count = (await session.execute(stmt_priority)).scalar() or 0
+                if count > 0:
+                    priority_stats[priority.value] = count
+            
+            # Average response time (in minutes)
+            stmt_avg_response = select(
+                func.avg(
+                    func.julianday(Ticket.first_response_at) - func.julianday(Ticket.created_at)
+                ) * 24 * 60  # Convert days to minutes
+            ).where(
+                and_(
+                    Ticket.created_at >= today_start,
+                    Ticket.created_at < today_end,
+                    Ticket.first_response_at.isnot(None)
+                )
+            )
+            avg_response_minutes = (await session.execute(stmt_avg_response)).scalar()
+            
+            # Average satisfaction rating
+            stmt_avg_rating = select(func.avg(Ticket.rating)).where(
+                and_(
+                    Ticket.closed_at >= today_start,
+                    Ticket.closed_at < today_end,
+                    Ticket.rating.isnot(None)
+                )
+            )
+            avg_rating = (await session.execute(stmt_avg_rating)).scalar()
+            
+            # Count of rated tickets
+            stmt_rated = select(func.count(Ticket.id)).where(
+                and_(
+                    Ticket.closed_at >= today_start,
+                    Ticket.closed_at < today_end,
+                    Ticket.rating.isnot(None)
+                )
+            )
+            rated_count = (await session.execute(stmt_rated)).scalar() or 0
 
             # Top Categories
             stmt_cats = (
@@ -66,13 +105,48 @@ async def send_daily_statistics(bot: Bot):
 
         if not top_topics:
             top_topics = "Нет данных"
+        
+        # Priority breakdown
+        priority_text = ""
+        priority_names = {
+            "urgent": "🔴 Срочно",
+            "high": "🟠 Высокий",
+            "normal": "🟢 Обычный",
+            "low": "⚪ Низкий"
+        }
+        for priority, count in priority_stats.items():
+            priority_text += f"{priority_names.get(priority, priority)}: {count}\n"
+        
+        if not priority_text:
+            priority_text = "Нет данных"
+        
+        # Response time
+        response_time_text = "Нет данных"
+        if avg_response_minutes is not None:
+            if avg_response_minutes < 60:
+                response_time_text = f"{int(avg_response_minutes)} мин"
+            else:
+                hours = avg_response_minutes / 60
+                response_time_text = f"{hours:.1f} ч"
+        
+        # Rating
+        rating_text = "Нет данных"
+        if avg_rating is not None and rated_count > 0:
+            stars = "⭐" * round(avg_rating)
+            rating_text = f"{avg_rating:.1f}/5 {stars} ({rated_count} оценок)"
 
         report = (
-            f"📊 <b>Статистика за {date_str}:</b>\n"
+            f"📊 <b>Статистика за {date_str}:</b>\n\n"
+            f"<b>Общее:</b>\n"
             f"Всего запросов: {total_requests}\n"
-            f"Закрыто (Отвечено): {closed_requests}\n\n"
+            f"Закрыто: {closed_requests}\n\n"
+            f"<b>По приоритетам:</b>\n"
+            f"{priority_text}\n"
             f"<b>Топ тем:</b>\n"
-            f"{top_topics}"
+            f"{top_topics}\n"
+            f"<b>SLA метрики:</b>\n"
+            f"Среднее время ответа: {response_time_text}\n"
+            f"Средняя оценка: {rating_text}"
         )
 
         await bot.send_message(settings.TG_ADMIN_ID, report, parse_mode="HTML")

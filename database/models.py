@@ -17,6 +17,12 @@ class TicketStatus(str, PyEnum):
     IN_PROGRESS = "in_progress"
     CLOSED = "closed"
 
+class TicketPriority(str, PyEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
 class SenderRole(str, PyEnum):
     USER = "user"
     ADMIN = "admin"
@@ -35,11 +41,26 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(String(20), default=UserRole.USER)
+    
+    # University-specific fields
+    student_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    department: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    course: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="user")
+    tickets: Mapped[list["Ticket"]] = relationship(
+        "Ticket",
+        foreign_keys="[Ticket.user_id]",
+        back_populates="user"
+    )
+    assigned_tickets: Mapped[list["Ticket"]] = relationship(
+        "Ticket", 
+        foreign_keys="[Ticket.assigned_to]",
+        back_populates="assigned_staff"
+    )
 
 class Category(Base):
     __tablename__ = "categories"
@@ -58,18 +79,29 @@ class Ticket(Base):
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    assigned_to: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
     source: Mapped[SourceType] = mapped_column(String(10))
     question_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     status: Mapped[TicketStatus] = mapped_column(String(20), default=TicketStatus.NEW, index=True)
+    priority: Mapped[TicketPriority] = mapped_column(String(10), default=TicketPriority.NORMAL, index=True)
+    
+    # SLA tracking
+    first_response_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
     closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    # Student satisfaction
+    rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-5
+    satisfaction_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    user: Mapped["User"] = relationship(back_populates="tickets")
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id], back_populates="tickets")
+    assigned_staff: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assigned_to], back_populates="assigned_tickets")
     category: Mapped["Category"] = relationship(back_populates="tickets")
     messages: Mapped[list["Message"]] = relationship(back_populates="ticket", cascade="all, delete-orphan")
 
