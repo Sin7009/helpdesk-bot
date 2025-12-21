@@ -286,8 +286,8 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
                 # И убираем кнопки
                 try:
                     await callback.message.edit_reply_markup(reply_markup=None)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to edit reply markup: {e}")
         else:
             await callback.answer("Тикет уже закрыт или не найден.")
 
