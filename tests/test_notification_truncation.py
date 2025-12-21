@@ -4,6 +4,12 @@ from services.ticket_service import add_message_to_ticket
 from database.models import Ticket, User, Category, TicketStatus
 import datetime
 
+def create_message_mock():
+    """Helper to create a mock message object with a valid integer message_id."""
+    msg = MagicMock()
+    msg.message_id = 12345
+    return msg
+
 @pytest.mark.asyncio
 async def test_notification_truncation_long_message():
     """
@@ -14,6 +20,7 @@ async def test_notification_truncation_long_message():
     session = AsyncMock()
     session.add = MagicMock()
     bot = AsyncMock()
+    bot.send_message.return_value = create_message_mock()
 
     # Setup Ticket
     user = User(id=1, external_id=123, full_name="Test User", source="tg")
@@ -46,4 +53,4 @@ async def test_notification_truncation_long_message():
     assert len(sent_text) <= 4096, f"Message length {len(sent_text)} exceeds 4096 limit!"
 
     # Assert truncation marker exists
-    assert "... (truncated)" in sent_text or "...(limit)" in sent_text
+    assert "... (truncated)" in sent_text or "...(truncated)" in sent_text
