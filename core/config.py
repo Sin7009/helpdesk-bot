@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Используем относительный путь для локальной разработки
     # Docker volume override это значение через .env
     DB_NAME: str = str(BASE_DIR / "support.db")
+    
+    # OpenRouter API key for LLM-based ticket summarization
+    OPENROUTER_API_KEY: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
