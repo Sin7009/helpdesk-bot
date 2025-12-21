@@ -1,15 +1,17 @@
 from aiogram import Router, F, Bot, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import html
 
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
 from services.faq_service import FAQService
 from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category
+from database.repositories.user_repository import UserRepository
 
 from core.config import settings
 
@@ -22,9 +24,16 @@ class ProfileForm(StatesGroup):
     waiting_student_id = State()
     waiting_department = State()
     waiting_course = State()
+    # New fields
+    waiting_group = State()
+    waiting_role = State()
+
+class Registration(StatesGroup):
+    waiting_for_course = State()
+    waiting_for_group = State()
+    waiting_for_role = State()
 
 # --- КЛАВИАТУРЫ ---
-# (Оставляем пока хардкод для надежности, раз вы его вернули)
 def get_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎓 Учеба", callback_data="cat_study"),
@@ -39,15 +48,114 @@ def get_back_kb():
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
 
-# --- ХЕНДЛЕРЫ ---
+def kb_courses():
+    buttons = []
+    # 2 rows of 3 buttons
+    row1 = [InlineKeyboardButton(text=str(i), callback_data=str(i)) for i in range(1, 4)]
+    row2 = [InlineKeyboardButton(text=str(i), callback_data=str(i)) for i in range(4, 7)]
+    return InlineKeyboardMarkup(inline_keyboard=[row1, row2])
 
-@router.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
+async def show_main_menu(message: types.Message):
     await message.answer(
-        f"Привет, {message.from_user.first_name}! 👋\nВыберите тему обращения:",
+        f"Привет, {html.escape(message.from_user.first_name)}! 👋\nВыберите тему обращения:",
         reply_markup=get_menu_kb()
     )
+
+# --- ХЕНДЛЕРЫ ---
+
+@router.message(CommandStart())
+async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSession):
+    await state.clear()
+
+    # 1. Получаем юзера из базы
+    repo = UserRepository(session)
+    user = await repo.get_or_create(message.from_user)
+
+    # 2. Проверяем заполненность профиля (группы)
+    if not user.group_number:
+        await message.answer(
+            f"Привет, {html.escape(user.full_name or message.from_user.first_name)}! 👋\n"
+            "Я вижу, мы еще не знакомы официально.\n\n"
+            "<b>На каком ты курсе?</b>",
+            reply_markup=kb_courses(),
+            parse_mode="HTML"
+        )
+        await state.set_state(Registration.waiting_for_course)
+    else:
+        # Если профиль есть — сразу к делу
+        await show_main_menu(message)
+
+# --- REGISTRATION WIZARD ---
+
+@router.callback_query(Registration.waiting_for_course)
+async def process_course_callback(callback: types.CallbackQuery, state: FSMContext):
+    # Handle course selection via button
+    if not callback.data.isdigit():
+        await callback.answer("Выберите курс кнопкой", show_alert=True)
+        return
+
+    course = int(callback.data)
+    await state.update_data(course=course)
+    await callback.message.edit_text(
+        f"Выбрано: {course} курс.\n"
+        "Отлично! А какая у тебя <b>группа</b>? (например, <i>ИВТ-201</i>)",
+        parse_mode="HTML"
+    )
+    await state.set_state(Registration.waiting_for_group)
+    await callback.answer()
+
+@router.message(Registration.waiting_for_course)
+async def process_course_text(message: types.Message, state: FSMContext):
+    # Fallback if user types instead of clicking
+    if not message.text.isdigit() or not (1 <= int(message.text) <= 6):
+        await message.answer("Пожалуйста, выберите число от 1 до 6.", reply_markup=kb_courses())
+        return
+
+    await state.update_data(course=int(message.text))
+    await message.answer("Отлично! А какая у тебя <b>группа</b>? (например, <i>ИВТ-201</i>)", parse_mode="HTML")
+    await state.set_state(Registration.waiting_for_group)
+
+@router.message(Registration.waiting_for_group)
+async def process_group(message: types.Message, state: FSMContext):
+    group = message.text.strip().upper()
+    if len(group) > 20:
+         await message.answer("Слишком длинное название группы. Попробуйте короче.")
+         return
+
+    await state.update_data(group=group)
+
+    # Спрашиваем про старосту
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Я староста ⭐", callback_data="role_head")],
+        [InlineKeyboardButton(text="Просто студент 🎓", callback_data="role_student")]
+    ])
+    await message.answer(f"Группа: {html.escape(group)}\nПоследний вопрос: ты староста группы?", reply_markup=kb)
+    await state.set_state(Registration.waiting_for_role)
+
+@router.callback_query(Registration.waiting_for_role)
+async def process_role(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    if callback.data not in ["role_head", "role_student"]:
+        await callback.answer()
+        return
+
+    is_head = (callback.data == "role_head")
+    data = await state.get_data()
+
+    # СОХРАНЯЕМ В БАЗУ
+    repo = UserRepository(session)
+    await repo.update_profile(
+        callback.from_user.id,
+        course=data['course'],
+        group=data['group'],
+        is_head_student=is_head
+    )
+
+    await state.clear()
+    await callback.message.edit_text("✅ Профиль заполнен! Теперь админы будут знать, кто им пишет.")
+    await show_main_menu(callback.message)
+
+
+# --- GENERAL HANDLERS ---
 
 @router.callback_query(F.data == "show_faq")
 async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
@@ -152,6 +260,11 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
     # 4. Если тикета нет — проверяем создание нового
     current_state = await state.get_state()
 
+    # Check for Registration states (should not happen if flow is enforced, but good to catch)
+    if current_state in [Registration.waiting_for_course, Registration.waiting_for_group, Registration.waiting_for_role]:
+        # Let the specific handlers pick it up
+        return
+
     if current_state == TicketForm.waiting_text:
         # Создание нового тикета
         data = await state.get_data()
@@ -168,6 +281,13 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         return
 
     # 5. Если студент пишет сообщение без выбора меню — сохраняем его и просим выбрать тему
+    # Check if registered first? No, handle_text might be triggered before start if user just types.
+    # But if they type, we should check registration?
+    # For now, let's keep it simple: if they type text without active ticket, we prompt menu.
+    # The menu buttons will trigger /start logic or category selection which checks registration?
+    # Actually, category selection DOES NOT check registration currently.
+    # But /start does.
+
     await state.update_data(saved_text=message.text)
 
     await message.answer(
@@ -199,11 +319,11 @@ async def cmd_myprofile(message: types.Message, session: AsyncSession):
     # Format profile information
     profile_lines = [
         "👤 <b>Ваш профиль:</b>\n",
-        f"Имя: {user.full_name or 'Не указано'}"
+        f"Имя: {html.escape(user.full_name or 'Не указано')}"
     ]
     
     if user.student_id:
-        profile_lines.append(f"Студ. билет: {user.student_id}")
+        profile_lines.append(f"Студ. билет: {html.escape(user.student_id)}")
     else:
         profile_lines.append("Студ. билет: <i>не указан</i>")
     
@@ -211,9 +331,17 @@ async def cmd_myprofile(message: types.Message, session: AsyncSession):
         profile_lines.append(f"Курс: {user.course}")
     else:
         profile_lines.append("Курс: <i>не указан</i>")
+
+    if user.group_number:
+        profile_lines.append(f"Группа: {html.escape(user.group_number)}")
+    else:
+         profile_lines.append("Группа: <i>не указана</i>")
+
+    role_str = "⭐ Староста" if user.is_head_student else "🎓 Студент"
+    profile_lines.append(f"Статус: {role_str}")
     
     if user.department:
-        profile_lines.append(f"Факультет/Институт: {user.department}")
+        profile_lines.append(f"Факультет/Институт: {html.escape(user.department)}")
     else:
         profile_lines.append("Факультет/Институт: <i>не указан</i>")
     
@@ -264,7 +392,7 @@ async def process_student_id(message: types.Message, state: FSMContext):
     )
 
 @router.message(ProfileForm.waiting_course)
-async def process_course(message: types.Message, state: FSMContext):
+async def process_course_update(message: types.Message, state: FSMContext):
     """Process course input."""
     course_text = message.text.strip()
     course = None
@@ -280,8 +408,51 @@ async def process_course(message: types.Message, state: FSMContext):
             return
     
     await state.update_data(course=course)
-    await state.set_state(ProfileForm.waiting_department)
+    await state.set_state(ProfileForm.waiting_group)
     await message.answer(
+        "Введите вашу группу (или '-' чтобы пропустить):"
+    )
+
+@router.message(ProfileForm.waiting_group)
+async def process_group_update(message: types.Message, state: FSMContext):
+    group = message.text.strip()
+    if group == '-':
+        group = None
+    else:
+        group = group.upper()
+        if len(group) > 20:
+             await message.answer("Слишком длинное название группы. Попробуйте короче.")
+             return
+
+    await state.update_data(group=group)
+
+    # Ask for role
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Я староста ⭐", callback_data="role_head")],
+        [InlineKeyboardButton(text="Просто студент 🎓", callback_data="role_student")],
+        [InlineKeyboardButton(text="Не менять 🚫", callback_data="role_skip")]
+    ])
+    await message.answer("Вы староста группы?", reply_markup=kb)
+    await state.set_state(ProfileForm.waiting_role)
+
+@router.callback_query(ProfileForm.waiting_role)
+async def process_role_update(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    is_head = None
+    if callback.data == "role_head":
+        is_head = True
+    elif callback.data == "role_student":
+        is_head = False
+    # if role_skip, is_head remains None
+
+    await state.update_data(is_head=is_head)
+    await state.set_state(ProfileForm.waiting_department)
+
+    # We continue to department to match the old flow?
+    # Or just jump to department?
+    # The original flow had Department AFTER Course.
+    # My new flow inserted Group and Role after Course.
+
+    await callback.message.edit_text(
         "Введите название вашего факультета/института (или '-' чтобы пропустить):"
     )
 
@@ -296,20 +467,24 @@ async def process_department(message: types.Message, state: FSMContext, session:
     data = await state.get_data()
     student_id = data.get('student_id')
     course = data.get('course')
+    group = data.get('group')
+    is_head = data.get('is_head')
     
-    # Update user profile
-    result = await session.execute(
-        select(User).where(
-            User.external_id == message.from_user.id,
-            User.source == SourceType.TELEGRAM
-        ).limit(1)
-    )
-    user = result.scalar_one_or_none()
+    # Use UserRepository to get user, then update all fields in one transaction
+    repo = UserRepository(session)
+    user = await repo.get_by_external_id(message.from_user.id, SourceType.TELEGRAM)
     
     if user:
-        user.student_id = student_id
-        user.course = course
+        if course is not None:
+            user.course = course
+        if group is not None:
+            user.group_number = group
+        if is_head is not None:
+            user.is_head_student = is_head
+
         user.department = department
+        user.student_id = student_id
+
         await session.commit()
         
         await message.answer(
@@ -322,4 +497,3 @@ async def process_department(message: types.Message, state: FSMContext, session:
         await message.answer("❌ Ошибка при обновлении профиля. Попробуйте позже.")
     
     await state.clear()
-
