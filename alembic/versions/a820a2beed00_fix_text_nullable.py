@@ -19,14 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table('messages', schema=None) as batch_op:
-        batch_op.alter_column('text',
-               existing_type=sa.TEXT(),
-               nullable=True)
+    """No-op migration; original text-nullable change was done in df5ef2501dd8."""
+    pass
 
 
 def downgrade() -> None:
-    with op.batch_alter_table('messages', schema=None) as batch_op:
-        batch_op.alter_column('text',
-               existing_type=sa.TEXT(),
-               nullable=False)
+    """No-op downgrade corresponding to the no-op upgrade."""
+    pass
