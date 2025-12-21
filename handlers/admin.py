@@ -11,6 +11,7 @@ from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, 
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,21 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
         ticket = result.scalar_one_or_none()
 
         if ticket and ticket.status != TicketStatus.CLOSED:
+            # 1. Generate summary before closing (if messages exist)
+            msgs_stmt = select(Message).where(Message.ticket_id == ticket.id).order_by(Message.created_at)
+            msgs_result = await session.execute(msgs_stmt)
+            messages_list = msgs_result.scalars().all()
+            
+            if messages_list:
+                dialogue_text = LLMService.format_dialogue(messages_list)
+                # Call Gemini (async and fast)
+                summary = await LLMService.generate_summary(dialogue_text)
+                ticket.summary = summary
+                
+                # Log for verification
+                logger.info(f"Generated summary for ticket #{ticket.id}: {summary}")
+            
+            # 2. Now close the ticket
             ticket.status = TicketStatus.CLOSED
             ticket.closed_at = func.now()
             await session.commit()
@@ -195,6 +211,21 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
         ticket = result.scalar_one_or_none()
         
         if ticket and ticket.status != TicketStatus.CLOSED:
+            # 1. Generate summary before closing (if messages exist)
+            msgs_stmt = select(Message).where(Message.ticket_id == ticket.id).order_by(Message.created_at)
+            msgs_result = await session.execute(msgs_stmt)
+            messages_list = msgs_result.scalars().all()
+            
+            if messages_list:
+                dialogue_text = LLMService.format_dialogue(messages_list)
+                # Call Gemini (async and fast)
+                summary = await LLMService.generate_summary(dialogue_text)
+                ticket.summary = summary
+                
+                # Log for verification
+                logger.info(f"Generated summary for ticket #{ticket.id}: {summary}")
+            
+            # 2. Now close the ticket
             ticket.status = TicketStatus.CLOSED
             ticket.closed_at = func.now()
             await session.commit()
