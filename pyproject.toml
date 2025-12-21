@@ -45,6 +45,7 @@ omit = [
     "main.py",
     "init_db_script.py",
     "migrate_db.py",
+    "migrate_university_improvements.py",
 ]
 
 [tool.coverage.report]
