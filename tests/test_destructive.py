@@ -25,6 +25,12 @@ async def test_session(test_engine):
     async with async_session_factory() as session:
         yield session
 
+def create_message_mock():
+    """Helper to create a mock message object with a valid integer message_id."""
+    msg = MagicMock()
+    msg.message_id = 12345
+    return msg
+
 @pytest.mark.asyncio
 async def test_create_ticket_handles_large_payload_safely(test_session):
     """
@@ -45,7 +51,7 @@ async def test_create_ticket_handles_large_payload_safely(test_session):
         text = args[1] # args[0] is chat_id, args[1] is text
         if len(text) > 4096:
             raise Exception("Bad Request: message is too long")
-        return MagicMock()
+        return create_message_mock()
 
     bot.send_message.side_effect = side_effect
 
@@ -79,7 +85,7 @@ async def test_create_ticket_handles_large_payload_safely(test_session):
     assert len(sent_text) <= 4096
 
     # Assert truncation happened
-    assert "... (truncated)" in sent_text or "...(limit)" in sent_text
+    assert "... (truncated)" in sent_text or "...(truncated)" in sent_text
 
 @pytest.mark.asyncio
 async def test_create_ticket_handles_unescaped_html_input(test_session):
@@ -106,7 +112,7 @@ async def test_create_ticket_handles_unescaped_html_input(test_session):
             if "<3" in text:
                 raise Exception("Bad Request: Can't parse entities: ...")
 
-        return MagicMock()
+        return create_message_mock()
 
     bot.send_message.side_effect = side_effect
 

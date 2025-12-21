@@ -1,122 +1,44 @@
 import logging
 import datetime
 import html
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update
 from sqlalchemy.orm import selectinload, contains_eager
-from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority, DailyTicketCounter
+from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority
+from database.repositories.ticket_repository import TicketRepository
 from core.config import settings
 from core.constants import format_ticket_id
 from services.priority_service import detect_priority, get_priority_emoji, get_priority_text
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message as TgMessage
 
 logger = logging.getLogger(__name__)
 
 async def get_next_daily_id(session: AsyncSession) -> int:
     """Get the next daily_id atomically using a counter table.
     
-    This function prevents race conditions by using database-level atomic
-    updates. It creates or updates a counter for today's date and returns
-    the next available daily_id.
-    
-    Args:
-        session: Database session
-        
-    Returns:
-        The next daily_id for today
-        
-    Note:
-        This function handles the counter creation and increment atomically
-        to prevent duplicate daily_id values even under concurrent load.
-        Uses SELECT FOR UPDATE to serialize counter access across transactions.
+    Delegates to TicketRepository.
     """
-    from sqlalchemy.exc import IntegrityError
-    
-    today = datetime.date.today()
-    
-    # First, try to get existing counter with lock
-    stmt = select(DailyTicketCounter).where(DailyTicketCounter.date == today).with_for_update()
-    result = await session.execute(stmt)
-    counter_row = result.scalar_one_or_none()
-    
-    if counter_row is not None:
-        # Counter exists - increment it atomically
-        new_value = counter_row.counter + 1
-        counter_row.counter = new_value
-        await session.flush()
-        return new_value
-    
-    # Counter doesn't exist - create it
-    # This is the first ticket for today
-    # Use a nested transaction (savepoint) to handle race condition
-    try:
-        async with session.begin_nested():
-            new_counter = DailyTicketCounter(date=today, counter=1)
-            session.add(new_counter)
-            await session.flush()
-        return 1
-    except IntegrityError:
-        # Another transaction just created the counter
-        # Retry the select with lock
-        stmt = select(DailyTicketCounter).where(DailyTicketCounter.date == today).with_for_update()
-        result = await session.execute(stmt)
-        counter_row = result.scalar_one()
-        new_value = counter_row.counter + 1
-        counter_row.counter = new_value
-        await session.flush()
-        return new_value
+    repo = TicketRepository(session)
+    return await repo.get_next_daily_id()
 
 
 async def get_active_ticket(session: AsyncSession, user_id: int, source: str) -> Ticket | None:
     """Find an active ticket for the user.
     
-    An active ticket is one with status NEW or IN_PROGRESS. This function is
-    optimized to use a single query with JOIN instead of separate queries for
-    User and Ticket, reducing database round-trips.
-    
-    Args:
-        session: Database session
-        user_id: External user ID (Telegram/VK ID)
-        source: Source platform ('tg' or 'vk')
-        
-    Returns:
-        The active Ticket object if found, None otherwise.
+    Delegates to TicketRepository.
     """
-    stmt = (
-        select(Ticket)
-        .join(Ticket.user)
-        .options(contains_eager(Ticket.user), selectinload(Ticket.category))
-        .where(
-            User.external_id == user_id,
-            User.source == source,
-            Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS])
-        )
-        .limit(1)
-    )
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    repo = TicketRepository(session)
+    return await repo.get_active_by_user(user_id, source)
 
 async def get_user_history(session: AsyncSession, user_id: int) -> list[Ticket]:
     """Get the last 3 tickets for a user's history.
     
-    Returns tickets in descending order by creation date (newest first).
-    This is used to display user's ticket history in staff notifications.
-    
-    Args:
-        session: Database session
-        user_id: Internal user ID from database
-        
-    Returns:
-        List of up to 3 most recent Ticket objects.
+    Delegates to TicketRepository.
     """
-    result = await session.execute(
-        select(Ticket)
-        .where(Ticket.user_id == user_id)
-        .order_by(desc(Ticket.created_at))
-        .limit(3)
-    )
-    return result.scalars().all()
+    repo = TicketRepository(session)
+    return await repo.get_history(user_id)
 
 async def create_ticket(
     session: AsyncSession,
@@ -153,7 +75,12 @@ async def create_ticket(
     
     text = text.strip()
     
+    # Initialize Repo
+    repo = TicketRepository(session)
+
     # 1. Find or create user
+    # (Leaving raw SQL for User here as instructed to focus on Ticket logic,
+    # but could be moved to UserRepository in future)
     result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
     user = result.scalar_one_or_none()
 
@@ -174,8 +101,8 @@ async def create_ticket(
         session.add(category)
         await session.flush()
 
-    # 3. Get next daily_id atomically (prevents race conditions)
-    daily_id = await get_next_daily_id(session)
+    # 3. Get next daily_id atomically via Repo
+    daily_id = await repo.get_next_daily_id()
     
     # 3.5. Detect priority automatically
     priority = detect_priority(text, category_name)
@@ -197,8 +124,8 @@ async def create_ticket(
     msg = Message(ticket_id=active_ticket.id, sender_role=SenderRole.USER, text=text)
     session.add(msg)
     
-    # 6. Get history for notification
-    history = await get_user_history(session, user.id)
+    # 6. Get history for notification via Repo
+    history = await repo.get_history(user.id)
     history_text = ""
     for h in history:
         if h.id == active_ticket.id: continue # Skip current
@@ -214,29 +141,14 @@ async def create_ticket(
     # Commit DB changes
     await session.commit()
 
-    # 7. Notify Staff/Admin
+    # 7. Notify Staff/Admin and Save Message ID
     try:
-        # Create notification text
-        category_text = category.name if category else "General"
-        safe_user_name = html.escape(user_full_name)
-        safe_text = html.escape(text)  # <--- SANITIZATION ADDED
+        sent_msg = await _send_staff_notification(bot, active_ticket, user, text, history_text, is_new_ticket=True)
 
-        admin_text = (
-            f"🔥 <b>Новый запрос №{active_ticket.daily_id}</b> ({format_ticket_id(active_ticket.id)})\n"
-            f"От: <a href='tg://user?id={user_id}'>{safe_user_name}</a>\n"
-            f"Тема: {category_text}\n"
-            f"Текст: {safe_text}\n\n"
-            f"<i>История:</i>\n{history_text}\n\n"
-            f"<i>Ответьте на это сообщение (Reply), чтобы написать студенту.</i>"
-        )
+        if sent_msg:
+            active_ticket.admin_message_id = sent_msg.message_id
+            await session.commit() # Save the link "Ticket <-> Staff Chat Message"
 
-        # Add Close button
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{active_ticket.id}")]
-        ])
-
-        # Notify staff chat
-        await _send_staff_notification(bot, active_ticket, user, text, history_text, is_new_ticket=True)
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff: {e}")
 
@@ -267,7 +179,13 @@ async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str
     try:
         # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
         user = ticket.user
-        await _send_staff_notification(bot, ticket, user, text, is_new_ticket=False)
+        sent_msg = await _send_staff_notification(bot, ticket, user, text, is_new_ticket=False)
+
+        if sent_msg:
+            # Update admin_message_id so staff can reply to the latest message
+            ticket.admin_message_id = sent_msg.message_id
+            await session.commit()
+
     except Exception as e:
         logger.error(f"⚠️ Failed to notify staff about new message: {e}")
 
@@ -279,10 +197,11 @@ async def _send_staff_notification(
     text: str,
     history_text: str = None,
     is_new_ticket: bool = False
-):
+) -> Optional[TgMessage]:
     """
     Helper function to send notifications to staff.
     Handles message construction, HTML escaping, and truncation of long messages.
+    Returns the sent Message object or None.
     """
     MAX_MESSAGE_LENGTH = 4096
 
@@ -358,8 +277,8 @@ async def _send_staff_notification(
         [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
     ])
 
-    # Final safety check
-    # We trust our calculation above. If it's still too long, we let it fail (better than sending broken HTML)
-    # or we could try to truncate intelligently again, but simple hard slice is dangerous for HTML.
-
-    await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+    try:
+        return await bot.send_message(settings.TG_STAFF_CHAT_ID, admin_text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"⚠️ Failed to notify staff: {e}")
+        return None

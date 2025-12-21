@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.setup import new_session
 from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, SenderRole, Category
+from database.repositories.ticket_repository import TicketRepository
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -47,7 +48,6 @@ async def is_root_admin(user_id: int) -> bool:
     return user_id == settings.TG_ADMIN_ID
 
 # --- УПРАВЛЕНИЕ (Модераторы / FAQ / Категории) ---
-# (Оставляем всё как было, сокращено для ясности)
 
 @router.message(Command("add_category"))
 async def add_category_cmd(message: types.Message, command: CommandObject):
@@ -86,28 +86,42 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
     if message.reply_to_message.from_user.id != bot_obj.id:
         return
 
-    # 3. Парсинг ID
-    origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-    
-    # Ищем ID: #123 (Основной формат)
-    match = re.search(r"ID:\s*#(\d+)", origin_text)
-    
-    # Fallback (Если вдруг старый формат #123)
-    if not match:
-        match = re.search(r"#(\d+)", origin_text)
+    # Инициализируем репозиторий
+    ticket_repo = TicketRepository(session)
 
-    if not match:
+    # 3. Парсинг / Поиск тикета
+    
+    # 3.1 Поиск по ID сообщения (Ironclad method)
+    reply_msg_id = message.reply_to_message.message_id
+    ticket = await ticket_repo.get_by_admin_message_id(reply_msg_id)
+    
+    # 3.2 Если не нашли (старый тикет) — включаем Fallback (Regex)
+    if not ticket:
+        origin_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+        # Ищем ID: #123 (Основной формат)
+        match = re.search(r"ID:\s*#(\d+)", origin_text)
+
+        # Fallback (Если вдруг старый формат #123)
+        if not match:
+            match = re.search(r"#(\d+)", origin_text)
+
+        if match:
+            try:
+                ticket_id = int(match.group(1))
+                # Validate ticket_id is reasonable
+                if 0 < ticket_id < 2147483647:
+                    # Manually fetch ticket if found via regex since repo doesn't have get_by_id logic exposed easily
+                    # or we can use generic get_by_id from BaseRepo if public, but it doesn't load User.
+                    # So we use manual query to be safe and match process_reply expectation.
+                    stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
+                    result = await session.execute(stmt)
+                    ticket = result.scalar_one_or_none()
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Failed to parse ticket ID from text: {origin_text}, error: {e}")
+
+    if not ticket:
         # Если не нашли ID тикета — просто игнорируем
-        return
-
-    try:
-        ticket_id = int(match.group(1))
-        # Validate ticket_id is reasonable (positive integer, not too large)
-        if ticket_id <= 0 or ticket_id > 2147483647:  # Max int32
-            logger.warning(f"Invalid ticket ID parsed: {ticket_id}")
-            return
-    except (ValueError, IndexError) as e:
-        logger.warning(f"Failed to parse ticket ID from text: {origin_text}, error: {e}")
         return
 
     answer_text = message.text
@@ -115,7 +129,7 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
         await message.answer("⚠️ Текст ответа не может быть пустым.")
         return
 
-    await process_reply(bot, session, ticket_id, answer_text, message, close=False)
+    await process_reply(bot, session, ticket.id, answer_text, message, close=False, ticket_obj=ticket)
 
 # 2. Команда /reply ID Текст
 @router.message(Command("reply"))
@@ -127,6 +141,7 @@ async def admin_reply_command(message: types.Message, command: CommandObject, bo
              return
         try:
             t_id, text = command.args.split(" ", 1)
+            # For command, we don't have the object, so we pass ID
             await process_reply(bot, session, int(t_id), text, message, close=False)
         except ValueError:
             await message.answer("Формат: /reply ID Текст")
@@ -282,7 +297,8 @@ async def process_reply(
     ticket_id: int,
     text: str,
     message: types.Message,
-    close: bool = False
+    close: bool = False,
+    ticket_obj: Ticket | None = None
 ) -> None:
     """Process admin reply to a ticket.
     
@@ -293,6 +309,7 @@ async def process_reply(
         text: Reply text
         message: Admin's message object
         close: Whether to close the ticket after replying
+        ticket_obj: Optional Ticket object if already loaded
     """
     # Validate inputs
     if not text or not text.strip():
@@ -301,10 +318,12 @@ async def process_reply(
     
     text = text.strip()
     
-    # Используем stmt вместо get, чтобы подгрузить User сразу
-    stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
-    result = await session.execute(stmt)
-    ticket = result.scalar_one_or_none()
+    ticket = ticket_obj
+    if not ticket:
+        # Используем stmt вместо get, чтобы подгрузить User сразу
+        stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
+        result = await session.execute(stmt)
+        ticket = result.scalar_one_or_none()
 
     if not ticket:
         await message.answer("❌ Тикет не найден.")
@@ -352,7 +371,7 @@ async def process_reply(
         await message.answer(f"❌ Ошибка отправки: {e}")
 
 # --- RATING HANDLER (Student satisfaction) ---
-
+# ... (rest of the file remains same, but overwrite copies it all anyway)
 @router.callback_query(F.data.startswith("rate_"))
 async def handle_rating(callback: types.CallbackQuery, bot: Bot):
     """Handle student satisfaction rating for closed tickets."""

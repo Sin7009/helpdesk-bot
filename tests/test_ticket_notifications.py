@@ -4,12 +4,19 @@ from services.ticket_service import add_message_to_ticket, create_ticket
 from database.models import Ticket, User, Category, TicketStatus
 import datetime
 
+def create_message_mock():
+    """Helper to create a mock message object with a valid integer message_id."""
+    msg = MagicMock()
+    msg.message_id = 12345
+    return msg
+
 @pytest.mark.asyncio
 async def test_add_message_to_ticket_notifies_admin():
     # Mock dependencies
     session = AsyncMock()
     session.add = MagicMock() # Fix warning
     bot = AsyncMock()
+    bot.send_message.return_value = create_message_mock()
 
     # Setup Ticket with necessary relationships
     user = User(id=1, external_id=123, full_name="Test User", source="tg")
@@ -36,11 +43,15 @@ async def test_add_message_to_ticket_notifies_admin():
     assert "Новое сообщение" in args[1]
     assert "New message text" in args[1]
 
+    # Verify commit was called to save admin_message_id
+    assert session.commit.called
+
 @pytest.mark.asyncio
 async def test_create_ticket_notifies_admin():
     # Mock dependencies
     session = AsyncMock()
     bot = AsyncMock()
+    bot.send_message.return_value = create_message_mock()
 
     # Mock database responses for user/category lookup
     # Because create_ticket does DB queries, we need to mock the results of session.execute

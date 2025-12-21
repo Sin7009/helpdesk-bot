@@ -22,9 +22,18 @@ async def test_session():
 
     await engine.dispose()
 
+def create_message_mock(message_id: int):
+    """Helper to create a mock message object with a valid integer message_id."""
+    msg = MagicMock()
+    msg.message_id = message_id
+    return msg
+
 @pytest.mark.asyncio
 async def test_ticket_creation_sanitization(test_session):
     bot = AsyncMock()
+    # Configure send_message to return a mock message with an ID
+    bot.send_message.return_value = create_message_mock(1001)
+
     malicious_text = "Hello <b>bold</b> <a href='http://evil.com'>click me</a>"
 
     await create_ticket(
@@ -54,11 +63,16 @@ async def test_ticket_creation_sanitization(test_session):
 @pytest.mark.asyncio
 async def test_add_message_sanitization(test_session):
     bot = AsyncMock()
+    # Configure send_message to return a mock message with an ID
+    bot.send_message.return_value = create_message_mock(1001)
+
     # Create a ticket first
     ticket = await create_ticket(
         test_session, user_id=456, source="tg", text="Safe", bot=bot, category_name="General"
     )
     bot.reset_mock()
+    # Ensure next calls also return a valid message mock
+    bot.send_message.return_value = create_message_mock(1002)
 
     # Refresh ticket to load relationships (simulating real app behavior)
     # This prevents MissingGreenlet error when accessing ticket.user/ticket.category
@@ -103,6 +117,7 @@ async def test_admin_close_ticket_injection(test_session):
 
     # 2. Mock Objects
     bot = AsyncMock()
+    # Note: send_message is not called here (edit_text is used), but if it were, we'd need to mock return
 
     # Callback Object
     callback = AsyncMock(spec=types.CallbackQuery)
@@ -151,6 +166,9 @@ async def test_history_sanitization(test_session):
     If a previous ticket had malicious HTML, it might be injected into the new notification.
     """
     bot = AsyncMock()
+    # Configure send_message to return a mock message with an ID
+    bot.send_message.return_value = create_message_mock(1001)
+
     user_id = 1001
 
     # 1. Create first ticket with malicious text
@@ -162,6 +180,7 @@ async def test_history_sanitization(test_session):
     )
 
     bot.reset_mock()
+    bot.send_message.return_value = create_message_mock(1002)
 
     # 2. Create second ticket
     # The notification for this ticket will include the history (Ticket 1)
