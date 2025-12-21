@@ -53,12 +53,12 @@ class User(Base):
 
     tickets: Mapped[list["Ticket"]] = relationship(
         "Ticket",
-        foreign_keys="[Ticket.user_id]",
+        foreign_keys="Ticket.user_id",
         back_populates="user"
     )
     assigned_tickets: Mapped[list["Ticket"]] = relationship(
         "Ticket", 
-        foreign_keys="[Ticket.assigned_to]",
+        foreign_keys="Ticket.assigned_to",
         back_populates="assigned_staff"
     )
 
@@ -124,3 +124,19 @@ class FAQ(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     trigger_word: Mapped[str] = mapped_column(String(255), unique=True)
     answer_text: Mapped[str] = mapped_column(Text)
+
+class DailyTicketCounter(Base):
+    """Counter table for atomic daily_id generation.
+    
+    This table ensures that daily_id values are generated atomically
+    to prevent race conditions when multiple tickets are created simultaneously.
+    Each row represents a counter for a specific date.
+    """
+    __tablename__ = "daily_ticket_counter"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    date: Mapped[datetime.date] = mapped_column(unique=True, index=True)
+    counter: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

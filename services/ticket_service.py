@@ -2,9 +2,9 @@ import logging
 import datetime
 import html
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, update
 from sqlalchemy.orm import selectinload, contains_eager
-from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority
+from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority, DailyTicketCounter
 from core.config import settings
 from core.constants import format_ticket_id
 from services.priority_service import detect_priority, get_priority_emoji, get_priority_text
@@ -12,6 +12,61 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
+
+async def get_next_daily_id(session: AsyncSession) -> int:
+    """Get the next daily_id atomically using a counter table.
+    
+    This function prevents race conditions by using database-level atomic
+    updates. It creates or updates a counter for today's date and returns
+    the next available daily_id.
+    
+    Args:
+        session: Database session
+        
+    Returns:
+        The next daily_id for today
+        
+    Note:
+        This function handles the counter creation and increment atomically
+        to prevent duplicate daily_id values even under concurrent load.
+        Uses SELECT FOR UPDATE to serialize counter access across transactions.
+    """
+    from sqlalchemy.exc import IntegrityError
+    
+    today = datetime.date.today()
+    
+    # First, try to get existing counter with lock
+    stmt = select(DailyTicketCounter).where(DailyTicketCounter.date == today).with_for_update()
+    result = await session.execute(stmt)
+    counter_row = result.scalar_one_or_none()
+    
+    if counter_row is not None:
+        # Counter exists - increment it atomically
+        new_value = counter_row.counter + 1
+        counter_row.counter = new_value
+        await session.flush()
+        return new_value
+    
+    # Counter doesn't exist - create it
+    # This is the first ticket for today
+    # Use a nested transaction (savepoint) to handle race condition
+    try:
+        async with session.begin_nested():
+            new_counter = DailyTicketCounter(date=today, counter=1)
+            session.add(new_counter)
+            await session.flush()
+        return 1
+    except IntegrityError:
+        # Another transaction just created the counter
+        # Retry the select with lock
+        stmt = select(DailyTicketCounter).where(DailyTicketCounter.date == today).with_for_update()
+        result = await session.execute(stmt)
+        counter_row = result.scalar_one()
+        new_value = counter_row.counter + 1
+        counter_row.counter = new_value
+        await session.flush()
+        return new_value
+
 
 async def get_active_ticket(session: AsyncSession, user_id: int, source: str) -> Ticket | None:
     """Find an active ticket for the user.
@@ -119,20 +174,8 @@ async def create_ticket(
         session.add(category)
         await session.flush()
 
-    # 3. Calculate daily_id
-    today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    # Get the last ticket created today to increment its daily_id
-    # This avoids counting all rows (O(N)) and uses the index (O(1))
-    stmt = (
-        select(Ticket.daily_id)
-        .where(Ticket.created_at >= today_start)
-        .order_by(desc(Ticket.created_at))
-        .limit(1)
-    )
-    result = await session.execute(stmt)
-    last_daily_id = result.scalar_one_or_none()
-    daily_id = (last_daily_id or 0) + 1
+    # 3. Get next daily_id atomically (prevents race conditions)
+    daily_id = await get_next_daily_id(session)
     
     # 3.5. Detect priority automatically
     priority = detect_priority(text, category_name)
