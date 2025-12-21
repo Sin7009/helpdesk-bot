@@ -130,6 +130,9 @@ async def test_close_ticket_btn_valid(mock_bot):
     callback.message = AsyncMock()
     callback.message.edit_text = AsyncMock()
     callback.answer = AsyncMock()
+    # Explicitly set text attribute for the message mock to be a string, not AsyncMock
+    callback.message.text = "Ticket Content"
+    callback.message.caption = None
 
     ticket = MagicMock(spec=Ticket)
     ticket.id = 123
