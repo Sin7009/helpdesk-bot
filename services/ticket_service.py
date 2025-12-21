@@ -13,9 +13,19 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 logger = logging.getLogger(__name__)
 
 async def get_active_ticket(session: AsyncSession, user_id: int, source: str) -> Ticket | None:
-    """Finds an active ticket for the user.
+    """Find an active ticket for the user.
     
-    Optimized to use a single query with JOIN instead of separate queries for User and Ticket.
+    An active ticket is one with status NEW or IN_PROGRESS. This function is
+    optimized to use a single query with JOIN instead of separate queries for
+    User and Ticket, reducing database round-trips.
+    
+    Args:
+        session: Database session
+        user_id: External user ID (Telegram/VK ID)
+        source: Source platform ('tg' or 'vk')
+        
+    Returns:
+        The active Ticket object if found, None otherwise.
     """
     stmt = (
         select(Ticket)
@@ -32,7 +42,18 @@ async def get_active_ticket(session: AsyncSession, user_id: int, source: str) ->
     return result.scalar_one_or_none()
 
 async def get_user_history(session: AsyncSession, user_id: int) -> list[Ticket]:
-    """Get last 3 tickets for history."""
+    """Get the last 3 tickets for a user's history.
+    
+    Returns tickets in descending order by creation date (newest first).
+    This is used to display user's ticket history in staff notifications.
+    
+    Args:
+        session: Database session
+        user_id: Internal user ID from database
+        
+    Returns:
+        List of up to 3 most recent Ticket objects.
+    """
     result = await session.execute(
         select(Ticket)
         .where(Ticket.user_id == user_id)
@@ -41,7 +62,41 @@ async def get_user_history(session: AsyncSession, user_id: int) -> list[Ticket]:
     )
     return result.scalars().all()
 
-async def create_ticket(session: AsyncSession, user_id: int, source: str, text: str, bot: Bot, category_name: str, user_full_name: str = "Unknown"):
+async def create_ticket(
+    session: AsyncSession,
+    user_id: int,
+    source: str,
+    text: str,
+    bot: Bot,
+    category_name: str,
+    user_full_name: str = "Unknown"
+) -> Ticket:
+    """Create a new ticket for a user.
+    
+    Args:
+        session: Database session
+        user_id: External user ID (Telegram ID)
+        source: Source platform ('tg' or 'vk')
+        text: Question text
+        bot: Bot instance for notifications
+        category_name: Category name for the ticket
+        user_full_name: User's full name (default: "Unknown")
+        
+    Returns:
+        The created Ticket object
+        
+    Raises:
+        ValueError: If text is empty or too long
+    """
+    # Validate inputs
+    if not text or not text.strip():
+        raise ValueError("Question text cannot be empty")
+    
+    if len(text) > 10000:  # Reasonable limit for ticket text
+        raise ValueError("Question text is too long (max 10000 characters)")
+    
+    text = text.strip()
+    
     # 1. Find or create user
     result = await session.execute(select(User).where(User.external_id == user_id, User.source == source).limit(1))
     user = result.scalar_one_or_none()
@@ -139,7 +194,22 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
 
     return active_ticket
 
-async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str, bot: Bot):
+async def add_message_to_ticket(session: AsyncSession, ticket: Ticket, text: str, bot: Bot) -> None:
+    """Add a user message to an existing ticket and notify staff.
+    
+    This function adds a new message from the user to the ticket's message
+    history and sends a notification to the staff chat.
+    
+    Args:
+        session: Database session
+        ticket: The ticket to add the message to (must have user and category loaded)
+        text: The message text from the user
+        bot: Bot instance for sending notifications
+        
+    Note:
+        The ticket object must have its user and category relationships
+        pre-loaded (via selectinload) to avoid lazy-loading issues.
+    """
     # Add message
     msg = Message(ticket_id=ticket.id, sender_role=SenderRole.USER, text=text)
     session.add(msg)

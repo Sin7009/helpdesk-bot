@@ -1,5 +1,6 @@
 import re
 import html
+import logging
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
 from sqlalchemy import select, func
@@ -10,10 +11,21 @@ from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, 
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
 
+logger = logging.getLogger(__name__)
+
 router = Router()
 
 # --- ПРОВЕРКА ПРАВ ---
-async def is_admin_or_mod(user_id: int, session) -> bool:
+async def is_admin_or_mod(user_id: int, session: AsyncSession) -> bool:
+    """Check if user is an admin or moderator.
+    
+    Args:
+        user_id: Telegram user ID
+        session: Database session
+        
+    Returns:
+        True if user is admin or moderator, False otherwise
+    """
     if user_id == settings.TG_ADMIN_ID:
         return True
     stmt = select(User).where(User.external_id == user_id)
@@ -22,6 +34,14 @@ async def is_admin_or_mod(user_id: int, session) -> bool:
     return user and user.role in [UserRole.ADMIN, UserRole.MODERATOR]
 
 async def is_root_admin(user_id: int) -> bool:
+    """Check if user is the root admin.
+    
+    Args:
+        user_id: Telegram user ID
+        
+    Returns:
+        True if user is the root admin
+    """
     return user_id == settings.TG_ADMIN_ID
 
 # --- УПРАВЛЕНИЕ (Модераторы / FAQ / Категории) ---
@@ -48,8 +68,16 @@ async def add_category_cmd(message: types.Message, command: CommandObject):
 # 1. Ответ СВАЙПОМ (Native Reply)
 @router.message(F.reply_to_message)
 async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSession):
+    """Handle admin replies via native Telegram reply.
+    
+    Args:
+        message: The reply message from admin
+        bot: Bot instance
+        session: Database session
+    """
     # 1. Проверка прав
-    if not await is_admin_or_mod(message.from_user.id, session): return
+    if not await is_admin_or_mod(message.from_user.id, session):
+        return
 
     # 2. Проверка: отвечаем ли мы боту?
     bot_obj = await bot.get_me()
@@ -70,8 +98,20 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
         # Если не нашли ID тикета — просто игнорируем
         return
 
-    ticket_id = int(match.group(1))
+    try:
+        ticket_id = int(match.group(1))
+        # Validate ticket_id is reasonable (positive integer, not too large)
+        if ticket_id <= 0 or ticket_id > 2147483647:  # Max int32
+            logger.warning(f"Invalid ticket ID parsed: {ticket_id}")
+            return
+    except (ValueError, IndexError) as e:
+        logger.warning(f"Failed to parse ticket ID from text: {origin_text}, error: {e}")
+        return
+
     answer_text = message.text
+    if not answer_text or not answer_text.strip():
+        await message.answer("⚠️ Текст ответа не может быть пустым.")
+        return
 
     await process_reply(bot, session, ticket_id, answer_text, message, close=False)
 
@@ -168,43 +208,73 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
         else:
             await callback.answer("Тикет уже закрыт или не найден.")
 
-# --- ЛОГИКА ОТПРАВКИ ---
-async def process_reply(bot, session, ticket_id, text, message, close=False):
+async def process_reply(
+    bot: Bot,
+    session: AsyncSession,
+    ticket_id: int,
+    text: str,
+    message: types.Message,
+    close: bool = False
+) -> None:
+    """Process admin reply to a ticket.
+    
+    Args:
+        bot: Bot instance
+        session: Database session
+        ticket_id: ID of the ticket to reply to
+        text: Reply text
+        message: Admin's message object
+        close: Whether to close the ticket after replying
+    """
+    # Validate inputs
+    if not text or not text.strip():
+        await message.answer("⚠️ Текст ответа не может быть пустым.")
+        return
+    
+    text = text.strip()
+    
     # Используем stmt вместо get, чтобы подгрузить User сразу
     stmt = select(Ticket).options(selectinload(Ticket.user)).where(Ticket.id == ticket_id)
     result = await session.execute(stmt)
     ticket = result.scalar_one_or_none()
 
-    if ticket:
-        user = ticket.user # Теперь это безопасно, данные уже в памяти
-        # Отправляем студенту
-        try:
-            # 🎨 Palette UX: Добавляем подсказку, как ответить
-            reply_hint = "\n\n<i>(Чтобы ответить, просто отправьте сообщение)</i>" if not close else ""
-
-            await bot.send_message(
-                user.external_id,
-                f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}",
-                parse_mode="HTML"
-            )
-            
-            # Сохраняем ответ Админа в историю переписки
-            msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
-            session.add(msg)
-            
-            status_msg = "Ответ отправлен."
-            if close:
-                ticket.status = TicketStatus.CLOSED
-                ticket.closed_at = func.now()
-                status_msg += " Тикет закрыт."
-            else:
-                # Если не закрываем — меняем статус на In Progress, чтобы студент мог писать дальше
-                if ticket.status == TicketStatus.NEW:
-                    ticket.status = TicketStatus.IN_PROGRESS
-            
-            await session.commit()
-            await message.react([types.ReactionTypeEmoji(emoji="👍")]) # Ставим лайк сообщению админа вместо спама текстом
-        except Exception as e:
-            await message.answer(f"❌ Ошибка отправки: {e}")
-    else:
+    if not ticket:
         await message.answer("❌ Тикет не найден.")
+        return
+    
+    if ticket.status == TicketStatus.CLOSED:
+        await message.answer("⚠️ Этот тикет уже закрыт.")
+        return
+
+    user = ticket.user  # Теперь это безопасно, данные уже в памяти
+    
+    # Отправляем студенту
+    try:
+        # 🎨 Palette UX: Добавляем подсказку, как ответить
+        reply_hint = "\n\n<i>(Чтобы ответить, просто отправьте сообщение)</i>" if not close else ""
+
+        await bot.send_message(
+            user.external_id,
+            f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}",
+            parse_mode="HTML"
+        )
+        
+        # Сохраняем ответ Админа в историю переписки
+        msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
+        session.add(msg)
+        
+        status_msg = "Ответ отправлен."
+        if close:
+            ticket.status = TicketStatus.CLOSED
+            ticket.closed_at = func.now()
+            status_msg += " Тикет закрыт."
+        else:
+            # Если не закрываем — меняем статус на In Progress, чтобы студент мог писать дальше
+            if ticket.status == TicketStatus.NEW:
+                ticket.status = TicketStatus.IN_PROGRESS
+        
+        await session.commit()
+        await message.react([types.ReactionTypeEmoji(emoji="👍")])  # Ставим лайк сообщению админа вместо спама текстом
+    except Exception as e:
+        logger.error(f"Failed to send reply to user {user.external_id}: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка отправки: {e}")
