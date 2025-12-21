@@ -390,8 +390,11 @@ async def handle_rating(callback: types.CallbackQuery, bot: Bot):
                 await callback.answer("❌ Неверная оценка")
                 return
             
-            # Get ticket
-            stmt = select(Ticket).where(Ticket.id == ticket_id)
+            # Get ticket with user and category eagerly loaded
+            stmt = select(Ticket).options(
+                selectinload(Ticket.user),
+                selectinload(Ticket.category)
+            ).where(Ticket.id == ticket_id)
             result = await session.execute(stmt)
             ticket = result.scalar_one_or_none()
             

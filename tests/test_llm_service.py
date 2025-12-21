@@ -6,7 +6,12 @@ from database.models import Message
 @pytest.mark.asyncio
 async def test_generate_summary_success():
     """Test successful summary generation."""
-    with patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+    with patch('services.llm_service.settings') as mock_settings, \
+         patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+        # Mock settings to have API key
+        mock_settings.OPENROUTER_API_KEY = "test_api_key"
+        mock_settings.LLM_MODEL_NAME = "test-model"
+        
         # Mock session must be a MagicMock that returns a context manager
         mock_session = MagicMock()
         mock_request_ctx = MagicMock()
@@ -27,7 +32,12 @@ async def test_generate_summary_success():
 @pytest.mark.asyncio
 async def test_generate_summary_api_error():
     """Test API error handling."""
-    with patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+    with patch('services.llm_service.settings') as mock_settings, \
+         patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+        # Mock settings to have API key
+        mock_settings.OPENROUTER_API_KEY = "test_api_key"
+        mock_settings.LLM_MODEL_NAME = "test-model"
+        
         mock_session = MagicMock()
         mock_response = AsyncMock()
         mock_response.status = 500
@@ -42,7 +52,12 @@ async def test_generate_summary_api_error():
 @pytest.mark.asyncio
 async def test_suggest_faq_updates_success():
     """Test successful FAQ suggestion."""
-    with patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+    with patch('services.llm_service.settings') as mock_settings, \
+         patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+        # Mock settings to have API key
+        mock_settings.OPENROUTER_API_KEY = "test_api_key"
+        mock_settings.LLM_MODEL_NAME = "test-model"
+        
         mock_session = MagicMock()
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -65,7 +80,12 @@ async def test_suggest_faq_updates_empty():
 @pytest.mark.asyncio
 async def test_suggest_faq_updates_error():
     """Test error handling in analysis."""
-    with patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+    with patch('services.llm_service.settings') as mock_settings, \
+         patch('services.llm_service.aiohttp.ClientSession') as mock_session_cls:
+        # Mock settings to have API key
+        mock_settings.OPENROUTER_API_KEY = "test_api_key"
+        mock_settings.LLM_MODEL_NAME = "test-model"
+        
         mock_session = MagicMock()
         mock_response = AsyncMock()
         mock_response.status = 500
