@@ -101,7 +101,9 @@ async def create_ticket(session: AsyncSession, user_id: int, source: str, text: 
         if h.id == active_ticket.id: continue # Skip current
         date_str = h.created_at.strftime("%d.%m.%Y")
         summary = h.summary or h.question_text[:30] + "..." if h.question_text else "No text"
-        history_text += f"- {date_str}: {summary}\n"
+        # Sanitize summary to prevent HTML injection from previous tickets
+        safe_summary = html.escape(summary)
+        history_text += f"- {date_str}: {safe_summary}\n"
 
     if not history_text:
         history_text = "Нет предыдущих обращений"
