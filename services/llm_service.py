@@ -17,8 +17,9 @@ class LLMService:
     """Service for LLM-based ticket summarization via OpenRouter."""
     
     BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-    # Using Gemini Flash 2.5 - fast, cheap, huge context window
-    MODEL = "google/gemini-flash-1.5"
+    
+    # Model is now loaded from environment variables (via config)
+    MODEL = settings.LLM_MODEL_NAME
     
     @classmethod
     async def generate_summary(cls, dialogue_text: str) -> str:
@@ -68,8 +69,13 @@ class LLMService:
                         return "Ошибка генерации резюме."
                     
                     data = await resp.json()
-                    summary = data['choices'][0]['message']['content'].strip()
-                    return summary
+                    # Проверка на наличие выбора (бывает, что модель возвращает ошибку в другом формате)
+                    if 'choices' in data and len(data['choices']) > 0:
+                        summary = data['choices'][0]['message']['content'].strip()
+                        return summary
+                    else:
+                        logger.error(f"Unexpected response format: {data}")
+                        return "Ошибка формата ответа ИИ."
         except Exception as e:
             logger.error(f"Failed to generate summary: {e}", exc_info=True)
             return "Ошибка соединения с ИИ."
