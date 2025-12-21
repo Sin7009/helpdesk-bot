@@ -8,7 +8,8 @@ from database.models import TicketPriority
 URGENT_KEYWORDS = [
     "срочно", "urgent", "экзамен", "завтра", "сегодня", "не могу войти",
     "не работает личный кабинет", "заблокирован", "потерял пропуск",
-    "сессия", "аккредитация", "отчисление", "стипендия не пришла"
+    "сессия", "аккредитация", "отчисление", "стипендия не пришла",
+    "проблема с сессией"
 ]
 
 # Keywords that indicate high priority
@@ -18,10 +19,11 @@ HIGH_KEYWORDS = [
     "не могу записаться", "дипломная работа", "deadline"
 ]
 
-# Keywords that indicate low priority
+# Keywords that indicate low priority (informational queries)
+# These should be specific to avoid false positives
 LOW_KEYWORDS = [
-    "когда будет", "планируется ли", "вопрос", "интересно",
-    "можно узнать", "подскажите", "хотел бы узнать"
+    "когда будет", "планируется ли", "хотел бы узнать",
+    "можно узнать", "подскажите пожалуйста", "интересует"
 ]
 
 def detect_priority(text: str, category_name: str = None) -> TicketPriority:
@@ -40,7 +42,7 @@ def detect_priority(text: str, category_name: str = None) -> TicketPriority:
     
     text_lower = text.lower()
     
-    # Check for urgent keywords
+    # Check for urgent keywords (highest priority)
     for keyword in URGENT_KEYWORDS:
         if keyword in text_lower:
             return TicketPriority.URGENT
@@ -51,18 +53,12 @@ def detect_priority(text: str, category_name: str = None) -> TicketPriority:
             return TicketPriority.HIGH
     
     # Check for low priority keywords
+    # Only if no urgent/high keywords are present
     for keyword in LOW_KEYWORDS:
         if keyword in text_lower:
             return TicketPriority.LOW
     
-    # Category-based priority (some categories are inherently more urgent)
-    if category_name:
-        category_lower = category_name.lower()
-        if "it" in category_lower or "лк" in category_lower:
-            # IT issues often need faster response
-            return TicketPriority.HIGH
-    
-    # Default to normal priority
+    # Default to normal priority if no specific keywords found
     return TicketPriority.NORMAL
 
 def get_priority_emoji(priority: TicketPriority) -> str:

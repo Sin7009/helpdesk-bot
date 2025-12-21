@@ -51,7 +51,11 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="user")
+    tickets: Mapped[list["Ticket"]] = relationship(
+        "Ticket",
+        foreign_keys="[Ticket.user_id]",
+        back_populates="user"
+    )
     assigned_tickets: Mapped[list["Ticket"]] = relationship(
         "Ticket", 
         foreign_keys="[Ticket.assigned_to]",
