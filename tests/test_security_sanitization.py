@@ -142,3 +142,45 @@ async def test_admin_close_ticket_injection(test_session):
     assert parse_mode == "HTML"
     assert "&lt;script&gt;" in sent_text
     assert "<script>" not in sent_text
+
+@pytest.mark.asyncio
+async def test_history_sanitization(test_session):
+    """
+    Tests that ticket history included in notifications is properly sanitized.
+    Vulnerability: The system includes the summary of previous tickets in the admin notification.
+    If a previous ticket had malicious HTML, it might be injected into the new notification.
+    """
+    bot = AsyncMock()
+    user_id = 1001
+
+    # 1. Create first ticket with malicious text
+    # Short enough to fit in summary without slicing (usually 30 chars)
+    malicious_text = "<b>HACK</b>"
+    await create_ticket(
+        test_session, user_id=user_id, source="tg", text=malicious_text,
+        bot=bot, category_name="General", user_full_name="Attacker"
+    )
+
+    bot.reset_mock()
+
+    # 2. Create second ticket
+    # The notification for this ticket will include the history (Ticket 1)
+    await create_ticket(
+        test_session, user_id=user_id, source="tg", text="Normal text",
+        bot=bot, category_name="General", user_full_name="Attacker"
+    )
+
+    # 3. Verify notification content
+    assert bot.send_message.called
+    args, kwargs = bot.send_message.call_args
+    sent_text = args[1]
+
+    # Debug print
+    print(f"Sent text: {sent_text}")
+
+    # We expect the history section to contain the ESCAPED version of Ticket 1's text
+    # Should contain "&lt;b&gt;HACK&lt;/b&gt;"
+    # Should NOT contain "<b>HACK</b>"
+
+    assert "&lt;b&gt;HACK&lt;/b&gt;" in sent_text
+    assert "<b>HACK</b>" not in sent_text
