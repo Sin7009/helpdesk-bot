@@ -124,12 +124,27 @@ async def admin_reply_native(message: types.Message, bot: Bot, session: AsyncSes
         # Если не нашли ID тикета — просто игнорируем
         return
 
-    answer_text = message.text
-    if not answer_text or not answer_text.strip():
+    # 4. Extract content (text, photo, document)
+    text = message.text or message.caption or ""
+    media_id = None
+    content_type = "text"
+
+    if message.photo:
+        content_type = "photo"
+        media_id = message.photo[-1].file_id # Best quality
+    elif message.document:
+        content_type = "document"
+        media_id = message.document.file_id
+
+    if content_type == "text" and (not text or not text.strip()):
         await message.answer("⚠️ Текст ответа не может быть пустым.")
         return
 
-    await process_reply(bot, session, ticket.id, answer_text, message, close=False, ticket_obj=ticket)
+    await process_reply(
+        bot, session, ticket.id, text, message,
+        close=False, ticket_obj=ticket,
+        media_id=media_id, content_type=content_type
+    )
 
 # 2. Команда /reply ID Текст
 @router.message(Command("reply"))
@@ -298,7 +313,9 @@ async def process_reply(
     text: str,
     message: types.Message,
     close: bool = False,
-    ticket_obj: Ticket | None = None
+    ticket_obj: Ticket | None = None,
+    media_id: str = None,
+    content_type: str = "text"
 ) -> None:
     """Process admin reply to a ticket.
     
@@ -310,13 +327,14 @@ async def process_reply(
         message: Admin's message object
         close: Whether to close the ticket after replying
         ticket_obj: Optional Ticket object if already loaded
+        media_id: Optional file ID
+        content_type: Content type
     """
-    # Validate inputs
-    if not text or not text.strip():
+    text = text.strip() if text else ""
+
+    if content_type == "text" and not text:
         await message.answer("⚠️ Текст ответа не может быть пустым.")
         return
-    
-    text = text.strip()
     
     ticket = ticket_obj
     if not ticket:
@@ -340,14 +358,37 @@ async def process_reply(
         # 🎨 Palette UX: Добавляем подсказку, как ответить
         reply_hint = "\n\n<i>(Чтобы ответить, просто отправьте сообщение)</i>" if not close else ""
 
-        await bot.send_message(
-            user.external_id,
-            f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}",
-            parse_mode="HTML"
-        )
+        reply_text = f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}"
+
+        if content_type == "photo" and media_id:
+            await bot.send_photo(
+                user.external_id,
+                photo=media_id,
+                caption=reply_text,
+                parse_mode="HTML"
+            )
+        elif content_type == "document" and media_id:
+            await bot.send_document(
+                user.external_id,
+                document=media_id,
+                caption=reply_text,
+                parse_mode="HTML"
+            )
+        else:
+             await bot.send_message(
+                user.external_id,
+                reply_text,
+                parse_mode="HTML"
+            )
         
         # Сохраняем ответ Админа в историю переписки
-        msg = Message(ticket_id=ticket.id, sender_role=SenderRole.ADMIN, text=text)
+        msg = Message(
+            ticket_id=ticket.id,
+            sender_role=SenderRole.ADMIN,
+            text=text,
+            media_id=media_id,
+            content_type=content_type
+        )
         session.add(msg)
         
         # Track first response time (SLA metric)

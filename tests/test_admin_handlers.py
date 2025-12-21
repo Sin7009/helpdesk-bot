@@ -48,6 +48,8 @@ async def test_admin_reply_native_valid(mock_bot, mock_session):
     message.reply_to_message.text = "Question ID: #123"
     message.reply_to_message.message_id = 54321  # Add message_id attribute
     message.text = "Answer"
+    message.photo = None # Ensure photo attribute exists
+    message.document = None # Ensure document attribute exists
 
     # Mock ticket found
     ticket = MagicMock(spec=Ticket)
@@ -62,7 +64,11 @@ async def test_admin_reply_native_valid(mock_bot, mock_session):
         await admin_reply_native(message, mock_bot, mock_session)
 
         # The actual call includes ticket_obj parameter
-        mock_process.assert_called_with(mock_bot, mock_session, 123, "Answer", message, close=False, ticket_obj=ticket)
+        mock_process.assert_called_with(
+            mock_bot, mock_session, 123, "Answer", message,
+            close=False, ticket_obj=ticket,
+            media_id=None, content_type="text"
+        )
 
 @pytest.mark.asyncio
 async def test_admin_reply_native_ignore_user_reply(mock_bot, mock_session):

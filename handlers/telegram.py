@@ -2,14 +2,15 @@ from aiogram import Router, F, Bot, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from sqlalchemy import select
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ContentType
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
 from services.faq_service import FAQService
-from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category
+from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category, Message
 
 from core.config import settings
 
@@ -23,15 +24,18 @@ class ProfileForm(StatesGroup):
     waiting_department = State()
     waiting_course = State()
 
+class CommentForm(StatesGroup):
+    waiting_comment = State()
+
 # --- КЛАВИАТУРЫ ---
-# (Оставляем пока хардкод для надежности, раз вы его вернули)
 def get_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎓 Учеба", callback_data="cat_study"),
          InlineKeyboardButton(text="📄 Справки", callback_data="cat_docs")],
         [InlineKeyboardButton(text="💻 IT / ЛК", callback_data="cat_it"),
          InlineKeyboardButton(text="🏠 Общежитие", callback_data="cat_dorm")],
-        [InlineKeyboardButton(text="❓ Частые вопросы", callback_data="show_faq")]
+        [InlineKeyboardButton(text="❓ Частые вопросы", callback_data="show_faq")],
+        [InlineKeyboardButton(text="📂 Мои заявки", callback_data="my_tickets")]
     ])
 
 def get_back_kb():
@@ -101,10 +105,19 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     # Проверяем, сохранил ли пользователь текст заранее (из handle_text)
     data = await state.get_data()
     saved_text = data.get("saved_text")
+    saved_media = data.get("saved_media") # dict with media_id, content_type
 
-    if saved_text:
-        # Если текст уже есть — сразу создаем тикет
-        t = await create_ticket(session, callback.from_user.id, SourceType.TELEGRAM, saved_text, bot, category_name, callback.from_user.full_name)
+    if saved_text or saved_media:
+        # Если контент уже есть — сразу создаем тикет
+        text_to_use = saved_text if saved_text else ""
+        media_id = saved_media.get("media_id") if saved_media else None
+        content_type = saved_media.get("content_type") if saved_media else "text"
+
+        t = await create_ticket(
+            session, callback.from_user.id, SourceType.TELEGRAM,
+            text_to_use, bot, category_name, callback.from_user.full_name,
+            media_id=media_id, content_type=content_type
+        )
 
         await callback.message.edit_text(
             f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
@@ -121,43 +134,65 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     await state.set_state(TicketForm.waiting_text)
 
     await callback.message.edit_text(
-        f"Тема: <b>{category_name}</b>.\n✍️ Напишите ваш вопрос:",
+        f"Тема: <b>{category_name}</b>.\n✍️ Напишите ваш вопрос (можно прикрепить фото):",
         parse_mode="HTML",
         reply_markup=get_back_kb()
     )
 
+# --- Media and Text Handlers ---
+
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_text(message: types.Message, state: FSMContext, bot: Bot, session: AsyncSession):
-    # 1. Игнорируем сообщения в чате сотрудников
+@router.message(F.photo)
+@router.message(F.document)
+async def handle_message_content(message: types.Message, state: FSMContext, bot: Bot, session: AsyncSession):
+    """Universal handler for text and media messages."""
+
+    # 1. Ignore messages in staff chat
     if message.chat.id == settings.TG_STAFF_CHAT_ID:
         return
 
-    # 2. Проверка FAQ (Оптимизация: используем кэш)
-    faq = FAQService.find_match(message.text)
-    if faq:
-        await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
-        return
+    # Extract content
+    text = message.text or message.caption or ""
+    media_id = None
+    content_type = "text"
 
-    # 3. Проверка на активный тикет (добавление сообщения)
+    if message.photo:
+        content_type = "photo"
+        media_id = message.photo[-1].file_id # Best quality
+    elif message.document:
+        content_type = "document"
+        media_id = message.document.file_id
+
+    # 2. Check FAQ (only for pure text messages)
+    if content_type == "text" and text:
+        faq = FAQService.find_match(text)
+        if faq:
+            await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
+            return
+
+    # 3. Check for active ticket
     active_ticket = await get_active_ticket(session, message.from_user.id, SourceType.TELEGRAM)
 
     if active_ticket:
-        # Если есть тикет — просто добавляем сообщение
-        await add_message_to_ticket(session, active_ticket, message.text, bot)
+        # Add message to existing ticket
+        await add_message_to_ticket(session, active_ticket, text, bot, media_id=media_id, content_type=content_type)
         await message.answer("✅ Сообщение добавлено к диалогу.")
-        # Сбрасываем состояние, если вдруг оно зависло
         await state.clear()
         return
 
-    # 4. Если тикета нет — проверяем создание нового
+    # 4. If no ticket - check state for new ticket creation
     current_state = await state.get_state()
 
     if current_state == TicketForm.waiting_text:
-        # Создание нового тикета
+        # Create new ticket
         data = await state.get_data()
         category = data.get("category", "Общее")
 
-        t = await create_ticket(session, message.from_user.id, SourceType.TELEGRAM, message.text, bot, category, message.from_user.full_name)
+        t = await create_ticket(
+            session, message.from_user.id, SourceType.TELEGRAM,
+            text, bot, category, message.from_user.full_name,
+            media_id=media_id, content_type=content_type
+        )
         await message.answer(
             f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
             f"🕒 Оператор ответит в рабочее время.\n"
@@ -167,14 +202,175 @@ async def handle_text(message: types.Message, state: FSMContext, bot: Bot, sessi
         await state.clear()
         return
 
-    # 5. Если студент пишет сообщение без выбора меню — сохраняем его и просим выбрать тему
-    await state.update_data(saved_text=message.text)
+    # 5. Save content and ask for category
+    # If student writes/sends media without menu selection
+    await state.update_data(saved_text=text)
+    if media_id:
+        await state.update_data(saved_media={"media_id": media_id, "content_type": content_type})
 
     await message.answer(
         "Я запомнил ваш вопрос! 📝\n"
         "Теперь выберите тему, чтобы я знал, кому его передать: 👇",
         reply_markup=get_menu_kb()
     )
+
+# --- МОИ ЗАЯВКИ (My Tickets) ---
+
+@router.callback_query(F.data == "my_tickets")
+async def show_my_tickets(callback: types.CallbackQuery, session: AsyncSession):
+    # Find user ID first to get internal ID
+    result = await session.execute(select(User).where(User.external_id == callback.from_user.id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+         await callback.message.edit_text("У вас пока нет заявок.", reply_markup=get_back_kb())
+         return
+
+    # Fetch last 5 tickets
+    stmt = select(Ticket).where(Ticket.user_id == user.id).order_by(desc(Ticket.created_at)).limit(5)
+    result = await session.execute(stmt)
+    tickets = result.scalars().all()
+
+    if not tickets:
+        await callback.message.edit_text("📂 <b>Список заявок пуст.</b>", parse_mode="HTML", reply_markup=get_back_kb())
+        return
+
+    kb_rows = []
+    for t in tickets:
+        status_emoji = {
+            TicketStatus.NEW: "🟡",
+            TicketStatus.IN_PROGRESS: "🟡",
+            TicketStatus.CLOSED: "🟢"
+        }.get(t.status, "⚪")
+
+        btn_text = f"{status_emoji} №{t.daily_id}: {t.status.value}"
+        kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"ticket_detail_{t.id}")])
+
+    kb_rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")])
+
+    await callback.message.edit_text(
+        "📂 <b>Мои заявки:</b>\nВыберите заявку для просмотра:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    )
+
+@router.callback_query(F.data.startswith("ticket_detail_"))
+async def show_ticket_detail(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
+    t_id = int(callback.data.split("_")[-1])
+
+    # Load ticket with category
+    stmt = select(Ticket).options(selectinload(Ticket.category)).where(Ticket.id == t_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+
+    if not ticket:
+        await callback.answer("Заявка не найдена.")
+        return
+
+    # Check ownership
+    user_res = await session.execute(select(User).where(User.external_id == callback.from_user.id))
+    user = user_res.scalar_one_or_none()
+    if not user or ticket.user_id != user.id:
+        await callback.answer("Это не ваша заявка.")
+        return
+
+    cat_name = ticket.category.name if ticket.category else "Без категории"
+    date_str = ticket.created_at.strftime("%d.%m.%Y %H:%M")
+
+    status_text = {
+        TicketStatus.NEW: "Новая",
+        TicketStatus.IN_PROGRESS: "В работе",
+        TicketStatus.CLOSED: "Закрыта"
+    }.get(ticket.status, ticket.status)
+
+    text = (
+        f"🎫 <b>Заявка #{ticket.daily_id}</b>\n"
+        f"📅 Дата: {date_str}\n"
+        f"📂 Категория: {cat_name}\n"
+        f"📊 Статус: <b>{status_text}</b>\n\n"
+        f"📝 <b>Вопрос:</b>\n{ticket.question_text}\n"
+    )
+
+    if ticket.summary:
+        text += f"\n📋 <b>Итог:</b>\n{ticket.summary}\n"
+
+    # Buttons
+    btns = []
+    # Allow adding comment/re-opening
+    btns.append([InlineKeyboardButton(text="💬 Добавить комментарий", callback_data=f"add_comment_{t_id}")])
+    btns.append([InlineKeyboardButton(text="🔙 К списку", callback_data="my_tickets")])
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+
+@router.callback_query(F.data.startswith("add_comment_"))
+async def add_comment_ask(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    t_id = int(callback.data.split("_")[-1])
+
+    # Verify ticket exists and belongs to user (security check)
+    stmt = select(Ticket).where(Ticket.id == t_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+
+    # We also need user_id check here, but assuming context from prev step or re-checking
+    user_res = await session.execute(select(User).where(User.external_id == callback.from_user.id))
+    user = user_res.scalar_one_or_none()
+
+    if not ticket or not user or ticket.user_id != user.id:
+        await callback.answer("Ошибка доступа.", show_alert=True)
+        return
+
+    await state.update_data(comment_ticket_id=t_id)
+    await state.set_state(CommentForm.waiting_comment)
+
+    await callback.message.edit_text(
+        f"✍️ Напишите ваш комментарий к заявке #{ticket.daily_id}.\n"
+        "Если заявка закрыта, она будет открыта заново.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"ticket_detail_{t_id}")]
+        ])
+    )
+
+@router.message(CommentForm.waiting_comment)
+async def process_comment(message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    data = await state.get_data()
+    t_id = data.get("comment_ticket_id")
+
+    if not t_id:
+        await message.answer("Ошибка состояния. Попробуйте снова /start")
+        await state.clear()
+        return
+
+    # Load ticket with relationships
+    stmt = select(Ticket).options(selectinload(Ticket.user), selectinload(Ticket.category)).where(Ticket.id == t_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+
+    if ticket:
+        # Extract content
+        text = message.text or message.caption or ""
+        media_id = None
+        content_type = "text"
+
+        if message.photo:
+            content_type = "photo"
+            media_id = message.photo[-1].file_id
+        elif message.document:
+            content_type = "document"
+            media_id = message.document.file_id
+
+        await add_message_to_ticket(
+            session, ticket, text, bot,
+            media_id=media_id, content_type=content_type
+        )
+
+        await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
+    else:
+        await message.answer("❌ Заявка не найдена.")
+
+    await state.clear()
+    # Optionally show the ticket details again?
+    # await show_ticket_detail_logic... (too complex to call directly without callback structure, so just stop here)
+
 
 # --- ПРОФИЛЬ СТУДЕНТА ---
 
@@ -322,4 +518,3 @@ async def process_department(message: types.Message, state: FSMContext, session:
         await message.answer("❌ Ошибка при обновлении профиля. Попробуйте позже.")
     
     await state.clear()
-

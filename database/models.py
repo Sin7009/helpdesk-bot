@@ -114,7 +114,12 @@ class Message(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
     sender_role: Mapped[SenderRole] = mapped_column(String(10))
-    text: Mapped[str] = mapped_column(Text)
+
+    # Updated fields for media support
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str] = mapped_column(String(20), default="text") # text, photo, document
+    media_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # file_id from Telegram
+
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
