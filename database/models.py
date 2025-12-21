@@ -81,6 +81,9 @@ class Ticket(Base):
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
     assigned_to: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
 
+    # Message ID in the staff chat (for reliable replies)
+    admin_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     source: Mapped[SourceType] = mapped_column(String(10))
     question_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
