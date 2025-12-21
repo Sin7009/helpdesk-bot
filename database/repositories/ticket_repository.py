@@ -51,6 +51,19 @@ class TicketRepository(BaseRepository[Ticket]):
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def get_closed_summaries_since(self, since_date: datetime.datetime) -> List[str]:
+        """Get summaries of tickets closed since the given date."""
+        stmt = (
+            select(Ticket.summary)
+            .where(
+                Ticket.status == TicketStatus.CLOSED,
+                Ticket.closed_at >= since_date,
+                Ticket.summary.isnot(None)
+            )
+        )
+        result = await self.session.execute(stmt)
+        return [s for s in result.scalars().all() if s]
+
     async def get_next_daily_id(self) -> int:
         """Get the next daily_id atomically using a counter table."""
         today = datetime.date.today()

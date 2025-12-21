@@ -7,6 +7,9 @@ from database.models import Ticket, Category, TicketPriority
 from core.config import settings
 from aiogram import Bot
 
+from database.repositories.ticket_repository import TicketRepository
+from services.llm_service import LLMService
+
 logger = logging.getLogger(__name__)
 
 async def send_daily_statistics(bot: Bot):
@@ -154,9 +157,48 @@ async def send_daily_statistics(bot: Bot):
     except Exception as e:
         logger.error(f"Failed to send daily statistics: {e}", exc_info=True)
 
+async def send_weekly_faq_analysis(bot: Bot):
+    """Weekly analysis of trends and FAQ suggestions."""
+    logger.info("Starting weekly FAQ analysis...")
+
+    try:
+        # 1. Define period (last 7 days)
+        week_ago = datetime.datetime.now() - datetime.timedelta(days=7)
+
+        async with new_session() as session:
+            repo = TicketRepository(session)
+            # 2. Get raw data
+            summaries = await repo.get_closed_summaries_since(week_ago)
+
+            if len(summaries) < 5:
+                # If few tickets, analysis is not meaningful
+                return
+
+            # 3. Analyze via LLM
+            report = await LLMService.suggest_faq_updates(summaries)
+
+        # 4. Send report to Admin
+        msg = (
+            f"🧠 <b>Еженедельный AI-анализ поддержки</b>\n"
+            f"Проанализировано тикетов: {len(summaries)}\n\n"
+            f"{report}\n\n"
+            f"<i>Чтобы добавить FAQ, просто скопируйте и отправьте команду из отчета.</i>"
+        )
+
+        await bot.send_message(settings.TG_ADMIN_ID, msg, parse_mode="HTML")
+        logger.info("Weekly FAQ analysis sent.")
+
+    except Exception as e:
+        logger.error(f"Failed weekly analysis: {e}", exc_info=True)
+
 def setup_scheduler(bot: Bot):
     scheduler = AsyncIOScheduler()
-    # Run at 23:59 every day
+
+    # Send statistics every day at 23:59
     scheduler.add_job(send_daily_statistics, 'cron', hour=23, minute=59, args=[bot])
+
+    # Weekly analysis (Sunday, 20:00)
+    scheduler.add_job(send_weekly_faq_analysis, 'cron', day_of_week='sun', hour=20, minute=0, args=[bot])
+
     scheduler.start()
     return scheduler
