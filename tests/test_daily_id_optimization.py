@@ -28,7 +28,11 @@ async def test_session(test_engine):
 
 @pytest.mark.asyncio
 async def test_daily_id_generation(test_session):
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
 
     # Create a user to avoid issues
     user = User(external_id=100, source="tg", username="tester", full_name="Tester")
@@ -77,7 +81,11 @@ async def test_daily_id_reset(test_session):
     test_session.add(old_ticket)
     await test_session.commit()
 
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
     # Now create a new ticket today
     t_new = await create_ticket(test_session, 101, "tg", "New Day", bot, "Cat1", "Tester2")
 

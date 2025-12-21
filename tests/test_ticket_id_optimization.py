@@ -28,7 +28,13 @@ async def db_session(test_engine):
 
 @pytest.fixture
 def mock_bot():
-    return AsyncMock()
+    """Create a properly configured bot mock for testing."""
+    from unittest.mock import MagicMock
+    bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345  # Use a real integer
+    bot.send_message.return_value = mock_message
+    return bot
 
 # --- TEST ---
 

@@ -34,7 +34,11 @@ async def test_session(test_engine):
 @pytest.mark.asyncio
 async def test_atomic_daily_id_generation(test_session):
     """Test that daily_id is generated atomically without race conditions."""
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
 
     # Create a user
     user = User(external_id=100, source="tg", username="tester", full_name="Tester")
@@ -63,7 +67,11 @@ async def test_concurrent_ticket_creation(test_engine):
     async_session_factory = async_sessionmaker(
         test_engine, expire_on_commit=False, class_=AsyncSession
     )
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
 
     # Pre-create users and category in separate session
     async with async_session_factory() as setup_session:
@@ -125,7 +133,11 @@ async def test_daily_id_counter_table(test_session):
 @pytest.mark.asyncio
 async def test_daily_id_resets_each_day(test_session):
     """Test that daily_id resets for each new day."""
+    from unittest.mock import MagicMock
     bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
     
     # Create user
     user = User(external_id=200, source="tg", username="tester", full_name="Tester")
