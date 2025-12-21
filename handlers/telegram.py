@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
 from services.faq_service import FAQService
-from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category, Message
+from database.models import Ticket, TicketStatus, User, SourceType
 
 from core.config import settings
 
