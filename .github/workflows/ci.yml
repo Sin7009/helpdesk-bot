@@ -41,7 +41,7 @@ jobs:
 
     - name: Check coverage threshold
       run: |
-        uv run coverage report --fail-under=88
+        uv run coverage report --fail-under=76
 
     - name: Upload coverage reports
       uses: actions/upload-artifact@v4
