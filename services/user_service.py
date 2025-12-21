@@ -45,9 +45,15 @@ async def get_or_create_user(
 
     return user
 
-async def ensure_admin_exists(session: AsyncSession):
-    """
-    Ensures that the root admin exists and has the correct role.
+async def ensure_admin_exists(session: AsyncSession) -> None:
+    """Ensure that the root admin user exists in the database with correct role.
+    
+    This function checks if a user with the admin ID from settings exists.
+    If the user exists but doesn't have admin role, it updates the role.
+    If the user doesn't exist, it creates a new admin user.
+    
+    Args:
+        session: Database session for querying and updating users.
     """
     admin_id = settings.TG_ADMIN_ID
     if not admin_id:
