@@ -92,11 +92,12 @@ async def api_tickets(request: web.Request) -> web.Response:
         
         tickets_data = []
         for ticket in tickets:
+            # ИСПРАВЛЕНИЕ: Убрали .value, так как ticket.status уже строка
             tickets_data.append({
                 "id": ticket.id,
                 "daily_id": ticket.daily_id,
-                "status": ticket.status.value,
-                "priority": ticket.priority.value,
+                "status": ticket.status, 
+                "priority": ticket.priority, 
                 "category": ticket.category.name if ticket.category else None,
                 "question_text": ticket.question_text[:200] if ticket.question_text else None,
                 "summary": ticket.summary,
@@ -178,9 +179,10 @@ async def api_ticket_detail(request: web.Request) -> web.Response:
         # Build response
         messages = []
         for msg in sorted(ticket.messages, key=lambda m: m.created_at):
+            # ИСПРАВЛЕНИЕ: Убрали .value у sender_role
             messages.append({
                 "id": msg.id,
-                "sender_role": msg.sender_role.value,
+                "sender_role": msg.sender_role,
                 "text": msg.text,
                 "content_type": msg.content_type,
                 "created_at": msg.created_at.isoformat() if msg.created_at else None,
@@ -189,8 +191,8 @@ async def api_ticket_detail(request: web.Request) -> web.Response:
         ticket_data = {
             "id": ticket.id,
             "daily_id": ticket.daily_id,
-            "status": ticket.status.value,
-            "priority": ticket.priority.value,
+            "status": ticket.status, # ИСПРАВЛЕНИЕ: Убрали .value
+            "priority": ticket.priority, # ИСПРАВЛЕНИЕ: Убрали .value
             "category": ticket.category.name if ticket.category else None,
             "question_text": ticket.question_text,
             "summary": ticket.summary,
