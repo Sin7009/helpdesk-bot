@@ -401,9 +401,9 @@ class TestProcessReply:
 
         mock_bot.send_photo.assert_called_once()
         args, kwargs = mock_bot.send_photo.call_args
-        # The function uses keyword arguments for photo
-        assert kwargs.get('photo') == "photo_id" or (len(args) >= 2 and args[1] == "photo_id")
-        assert args[0] == 111 or kwargs.get('chat_id') == 111
+        # Verify the key parameters were passed correctly
+        assert args[0] == 111  # user.external_id
+        assert kwargs.get('photo') == "photo_id"
         assert "Photo caption" in kwargs.get('caption', '')
 
     @pytest.mark.asyncio
@@ -429,9 +429,9 @@ class TestProcessReply:
 
         mock_bot.send_document.assert_called_once()
         args, kwargs = mock_bot.send_document.call_args
-        # The function uses keyword arguments for document
-        assert kwargs.get('document') == "doc_id" or (len(args) >= 2 and args[1] == "doc_id")
-        assert args[0] == 111 or kwargs.get('chat_id') == 111
+        # Verify the key parameters were passed correctly
+        assert args[0] == 111  # user.external_id
+        assert kwargs.get('document') == "doc_id"
 
     @pytest.mark.asyncio
     async def test_process_reply_empty_text_without_media(self, mock_bot, mock_session):
