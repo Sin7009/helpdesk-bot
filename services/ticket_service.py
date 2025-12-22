@@ -1,6 +1,7 @@
 import logging
 import datetime
 import html
+import re
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update
@@ -15,6 +16,14 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message as TgMessage
 
 logger = logging.getLogger(__name__)
+
+# Список слов "благодарности", которые не должны переоткрывать тикет
+GRATITUDE_WORDS = {
+    "спасибо", "spasibo", "thanks", "thx", "спс", "благодарю", "ok", "ок", "merci", "дякую", "arigato"
+}
+
+# Максимальная длина сообщения, чтобы считаться "простой благодарностью"
+MAX_GRATITUDE_LENGTH = 15
 
 async def get_next_daily_id(session: AsyncSession) -> int:
     """Get the next daily_id atomically using a counter table.
@@ -181,7 +190,9 @@ async def add_message_to_ticket(
     This function adds a new message from the user to the ticket's message
     history and sends a notification to the staff chat.
     
-    If ticket was closed, it re-opens it.
+    If ticket was closed, it checks if the message is just a "thank you".
+    If so, it keeps it closed and saves the message silently.
+    Otherwise, it re-opens the ticket.
 
     Args:
         session: Database session
@@ -202,11 +213,33 @@ async def add_message_to_ticket(
     if content_type in ("photo", "document") and not media_id:
         raise ValueError(f"media_id is required when content_type is '{content_type}'")
     
-    # Re-open if closed
+    # Normalize text for check
+    clean_text = text.strip().lower() if text else ""
+    is_gratitude = False
+
+    # Check for gratitude only if:
+    # 1. Text is present and short
+    # 2. No media attached (usually gratitude is just text)
+    # 3. It doesn't contain a question mark (likely a new question otherwise)
+    if clean_text and len(clean_text) <= MAX_GRATITUDE_LENGTH and not media_id:
+        # Check against word list or regex
+        # Using simple word check + basic regex to ignore punctuation like "Thanks!"
+        # Remove punctuation for check
+        text_no_punct = re.sub(r'[^\w\s]', '', clean_text)
+        if text_no_punct in GRATITUDE_WORDS:
+            is_gratitude = True
+
+    # Re-open logic
+    should_reopen = False
     if ticket.status == TicketStatus.CLOSED:
-        ticket.status = TicketStatus.IN_PROGRESS
-        ticket.closed_at = None
-        # Could log re-opening here
+        if not is_gratitude:
+            should_reopen = True
+            ticket.status = TicketStatus.IN_PROGRESS
+            ticket.closed_at = None
+            # Could log re-opening here
+        else:
+            # It is gratitude, do NOT reopen
+            pass
 
     # Add message
     msg = Message(
@@ -220,21 +253,26 @@ async def add_message_to_ticket(
     await session.commit()
 
     # Notify Staff/Admin
-    try:
-        # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
-        user = ticket.user
-        sent_msg = await _send_staff_notification(
-            bot, ticket, user, text, is_new_ticket=False,
-            media_id=media_id, content_type=content_type
-        )
+    # Only notify if ticket is active (or re-opened).
+    # If it remained CLOSED (gratitude), skip notification.
+    if ticket.status != TicketStatus.CLOSED:
+        try:
+            # Теперь это безопасно, так как мы подгрузили их в get_active_ticket
+            user = ticket.user
+            sent_msg = await _send_staff_notification(
+                bot, ticket, user, text, is_new_ticket=False,
+                media_id=media_id, content_type=content_type
+            )
 
-        if sent_msg:
-            # Update admin_message_id so staff can reply to the latest message
-            ticket.admin_message_id = sent_msg.message_id
-            await session.commit()
+            if sent_msg:
+                # Update admin_message_id so staff can reply to the latest message
+                ticket.admin_message_id = sent_msg.message_id
+                await session.commit()
 
-    except Exception as e:
-        logger.error(f"⚠️ Failed to notify staff about new message: {e}")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to notify staff about new message: {e}")
+    else:
+        logger.info(f"Skipping staff notification for gratitude in closed ticket #{ticket.id}")
 
 
 async def _send_staff_notification(
