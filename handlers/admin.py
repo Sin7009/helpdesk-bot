@@ -6,7 +6,7 @@ import io
 import datetime
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,6 @@ from database.models import User, UserRole, FAQ, Ticket, TicketStatus, Message, 
 from database.repositories.ticket_repository import TicketRepository
 from core.config import settings
 from core.constants import TICKET_ID_PATTERN
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
@@ -129,6 +128,38 @@ async def _close_ticket_with_summary(
 
 
 # --- УПРАВЛЕНИЕ (Модераторы / FAQ / Категории) ---
+
+# НОВОЕ: Обработчик команды /admin
+@router.message(Command("admin"))
+async def open_admin_panel_cmd(message: types.Message, session: AsyncSession):
+    """Открыть WebApp админ-панель."""
+    if not await is_admin_or_mod(message.from_user.id, session):
+        return
+
+    # Проверка наличия URL в конфиге
+    if not settings.WEBAPP_URL:
+        await message.answer("❌ Ошибка: в .env не указан WEBAPP_URL")
+        return
+
+    # Формируем URL для кнопки
+    base_url = settings.WEBAPP_URL.rstrip('/')
+    admin_url = f"{base_url}/webapp/admin"
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="📱 Открыть панель",
+                web_app=types.WebAppInfo(url=admin_url)
+            )
+        ]
+    ])
+
+    await message.answer(
+        "<b>Панель управления тикетами</b>\n"
+        "Нажмите кнопку ниже, чтобы открыть список заявок и статистику.",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
 @router.message(Command("add_category"))
 async def add_category_cmd(message: types.Message, command: CommandObject):
@@ -633,7 +664,7 @@ async def process_reply(
         await message.answer(f"❌ Ошибка отправки: {e}")
 
 # --- RATING HANDLER (Student satisfaction) ---
-# ... (rest of the file remains same, but overwrite copies it all anyway)
+
 @router.callback_query(F.data.startswith("rate_"))
 async def handle_rating(callback: types.CallbackQuery, bot: Bot):
     """Handle student satisfaction rating for closed tickets."""
