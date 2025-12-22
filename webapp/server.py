@@ -129,11 +129,12 @@ async def api_ticket_detail(request: web.Request) -> web.Response:
         
         # Build response
         ticket_data = format_ticket(ticket)
-
+        
         messages = []
         for msg in sorted(ticket.messages, key=lambda m: m.created_at):
             messages.append({
                 "id": msg.id,
+                # ИСПРАВЛЕНИЕ: Проверяем, есть ли атрибут value, или используем как строку
                 "sender_role": msg.sender_role.value if hasattr(msg.sender_role, 'value') else msg.sender_role,
                 "text": msg.text,
                 "content_type": msg.content_type,
@@ -161,16 +162,16 @@ async def api_admin_data(request: web.Request) -> web.Response:
         # 1. Check Admin Rights
         stmt = select(User).where(User.external_id == user_id)
         user = (await session.execute(stmt)).scalar_one_or_none()
-
+        
         if not user or user.role not in [UserRole.ADMIN, UserRole.MODERATOR]:
             return web.json_response({"error": "Access denied"}, status=403)
 
         # 2. Optimized Statistics (GROUP BY)
         stats_stmt = select(Ticket.status, func.count(Ticket.id)).group_by(Ticket.status)
         stats_result = (await session.execute(stats_stmt)).all()
-
+        
         raw_stats = {row[0]: row[1] for row in stats_result}
-
+        
         # Fill missing statuses with 0
         stats = {
             status.value: raw_stats.get(status, 0)
@@ -192,6 +193,7 @@ async def api_admin_data(request: web.Request) -> web.Response:
             tickets_data.append({
                 "id": t.id,
                 "daily_id": t.daily_id,
+                # ИСПРАВЛЕНИЕ: Безопасное получение значения Enum
                 "status": t.status.value if hasattr(t.status, 'value') else t.status,
                 "priority": t.priority.value if hasattr(t.priority, 'value') else t.priority,
                 "user_name": user_name,
@@ -212,6 +214,7 @@ def format_ticket(ticket: Ticket) -> dict:
     return {
         "id": ticket.id,
         "daily_id": ticket.daily_id,
+        # ИСПРАВЛЕНИЕ: Проверяем наличие атрибута value
         "status": ticket.status.value if hasattr(ticket.status, 'value') else ticket.status,
         "priority": ticket.priority.value if hasattr(ticket.priority, 'value') else ticket.priority,
         "category": ticket.category.name if ticket.category else None,
@@ -231,10 +234,10 @@ def create_app() -> web.Application:
     app.router.add_get('/', index)
     app.router.add_get('/health', health)
     app.router.add_get('/webapp/tickets', student_tickets)
-    app.router.add_get('/webapp/admin', admin_dashboard)  # NEW: Admin route
+    app.router.add_get('/webapp/admin', admin_dashboard)  # Admin route
     app.router.add_get('/api/tickets', api_tickets)
     app.router.add_get('/api/tickets/{ticket_id}', api_ticket_detail)
-    app.router.add_get('/api/admin/data', api_admin_data) # NEW: Admin API
+    app.router.add_get('/api/admin/data', api_admin_data) # Admin API
     
     return app
 
@@ -336,7 +339,7 @@ STUDENT_TICKETS_HTML = """<!DOCTYPE html>
             
             let html = `<h2>Заявка #${t.daily_id}</h2>
                 <div style="margin-bottom:20px; color:gray">${t.category || 'Без категории'}</div>`;
-
+            
             if(t.messages) {
                 html += t.messages.map(m => `
                     <div class="msg ${m.sender_role === 'user' ? 'msg-user' : 'msg-admin'}">
@@ -377,20 +380,20 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
     <style>
         :root { --bg: #f5f5f5; --card: #fff; --text: #000; --accent: #2481cc; }
         body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 12px; margin:0; }
-
+        
         .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }
         .stat-card { background: var(--card); padding: 12px; border-radius: 10px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
         .stat-num { font-size: 20px; font-weight: 700; display: block; }
         .stat-lbl { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; display: block;}
-
+        
         h3 { margin: 0 0 10px 4px; font-size: 16px; opacity: 0.8; }
-
+        
         .row { background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
         .row-left { flex: 1; min-width: 0; padding-right: 10px; }
         .row-user { font-weight: 600; font-size: 14px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .row-txt { font-size: 13px; color: #333; margin: 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .row-meta { font-size: 11px; color: #999; }
-
+        
         .badge { font-size: 10px; padding: 4px 8px; border-radius: 12px; font-weight: 600; white-space: nowrap; }
         .st-new { background: #fee2e2; color: #ef4444; }
         .st-in_progress { background: #dbeafe; color: #3b82f6; }
@@ -413,7 +416,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
             try {
                 const res = await fetch(`/api/admin/data?user_id=${userId}`);
                 if(res.status === 403) return document.body.innerHTML = '<h2 style="color:red;text-align:center;margin-top:50px">Нет доступа</h2>';
-
+                
                 const data = await res.json();
                 renderStats(data.stats);
                 renderTickets(data.tickets);
@@ -449,7 +452,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
                 </div>
             `).join('');
         }
-
+        
         function escapeHtml(s) {
             return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
         }
