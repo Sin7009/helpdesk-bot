@@ -10,6 +10,7 @@ from database.repositories.ticket_repository import TicketRepository
 from core.config import settings
 from core.constants import format_ticket_id
 from services.priority_service import detect_priority, get_priority_emoji, get_priority_text
+from services.working_hours_service import is_within_working_hours, get_off_hours_message
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message as TgMessage
 

@@ -1,9 +1,13 @@
 import re
 import html
 import logging
+import csv
+import io
+import datetime
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, CommandObject
-from sqlalchemy import select, func
+from aiogram.types import BufferedInputFile
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.setup import new_session
@@ -64,6 +68,223 @@ async def add_category_cmd(message: types.Message, command: CommandObject):
             await message.answer(f"✅ Категория '{name}' добавлена.")
         except Exception as e:
             await message.answer(f"Ошибка: {e}")
+
+
+# --- НАЗНАЧЕНИЕ ТИКЕТОВ ---
+
+@router.message(Command("assign"))
+async def assign_ticket_cmd(message: types.Message, command: CommandObject, session: AsyncSession):
+    """Assign a ticket to a staff member.
+    
+    Usage: /assign <ticket_id> @username
+    
+    Args:
+        message: The message containing the command
+        command: CommandObject with parsed arguments
+        session: Database session
+    """
+    if not await is_admin_or_mod(message.from_user.id, session):
+        return
+    
+    if not command.args:
+        await message.answer(
+            "📋 <b>Формат:</b> /assign &lt;ticket_id&gt; @username\n\n"
+            "Пример: /assign 123 @moderator",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Parse arguments
+    parts = command.args.strip().split()
+    if len(parts) < 2:
+        await message.answer(
+            "❌ Недостаточно аргументов.\n"
+            "Формат: /assign &lt;ticket_id&gt; @username",
+            parse_mode="HTML"
+        )
+        return
+    
+    try:
+        ticket_id = int(parts[0])
+    except ValueError:
+        await message.answer("❌ ID тикета должен быть числом.")
+        return
+    
+    # Extract username (remove @ if present)
+    username = parts[1].lstrip("@").strip()
+    
+    if not username:
+        await message.answer("❌ Укажите username сотрудника.")
+        return
+    
+    # Find the ticket
+    stmt = select(Ticket).options(
+        selectinload(Ticket.user),
+        selectinload(Ticket.assigned_staff)
+    ).where(Ticket.id == ticket_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    
+    if not ticket:
+        await message.answer(f"❌ Тикет #{ticket_id} не найден.")
+        return
+    
+    if ticket.status == TicketStatus.CLOSED:
+        await message.answer(f"❌ Тикет #{ticket_id} уже закрыт.")
+        return
+    
+    # Find the staff member by username
+    stmt = select(User).where(
+        User.username == username,
+        User.role.in_([UserRole.ADMIN, UserRole.MODERATOR])
+    )
+    result = await session.execute(stmt)
+    staff = result.scalar_one_or_none()
+    
+    if not staff:
+        await message.answer(
+            f"❌ Пользователь @{html.escape(username)} не найден "
+            "или не является модератором/администратором."
+        )
+        return
+    
+    # Assign the ticket
+    old_assignee = ticket.assigned_staff.username if ticket.assigned_staff else None
+    ticket.assigned_to = staff.id
+    
+    # Change status to IN_PROGRESS if it was NEW
+    if ticket.status == TicketStatus.NEW:
+        ticket.status = TicketStatus.IN_PROGRESS
+    
+    await session.commit()
+    
+    # Notify
+    if old_assignee:
+        await message.answer(
+            f"✅ Тикет #{ticket_id} переназначен с @{html.escape(old_assignee)} "
+            f"на @{html.escape(username)}."
+        )
+    else:
+        await message.answer(
+            f"✅ Тикет #{ticket_id} назначен на @{html.escape(username)}."
+        )
+
+
+# --- ЭКСПОРТ СТАТИСТИКИ В CSV ---
+
+@router.message(Command("export"))
+async def export_statistics_cmd(message: types.Message, command: CommandObject, session: AsyncSession):
+    """Export ticket statistics to CSV file.
+    
+    Usage: /export [days]
+    Default: last 30 days
+    
+    Args:
+        message: The message containing the command
+        command: CommandObject with parsed arguments
+        session: Database session
+    """
+    if not await is_admin_or_mod(message.from_user.id, session):
+        return
+    
+    # Parse days argument (default 30)
+    days = 30
+    if command.args:
+        try:
+            days = int(command.args.strip())
+            if days < 1 or days > 365:
+                await message.answer("❌ Количество дней должно быть от 1 до 365.")
+                return
+        except ValueError:
+            await message.answer("❌ Укажите число дней. Пример: /export 7")
+            return
+    
+    await message.answer(f"📊 Генерирую отчет за {days} дней...")
+    
+    # Calculate date range
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(days=days)
+    
+    # Fetch tickets
+    stmt = (
+        select(Ticket)
+        .options(
+            selectinload(Ticket.user),
+            selectinload(Ticket.category),
+            selectinload(Ticket.assigned_staff)
+        )
+        .where(Ticket.created_at >= start_date)
+        .order_by(Ticket.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    tickets = result.scalars().all()
+    
+    if not tickets:
+        await message.answer("📭 Нет тикетов за указанный период.")
+        return
+    
+    # Create CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        "ID",
+        "Daily ID",
+        "Дата создания",
+        "Дата закрытия",
+        "Статус",
+        "Приоритет",
+        "Категория",
+        "Пользователь",
+        "User ID",
+        "Назначен на",
+        "Время первого ответа (мин)",
+        "Оценка",
+        "Текст вопроса"
+    ])
+    
+    # Data rows
+    for ticket in tickets:
+        # Calculate first response time in minutes
+        first_response_mins = None
+        if ticket.first_response_at and ticket.created_at:
+            delta = ticket.first_response_at - ticket.created_at
+            first_response_mins = round(delta.total_seconds() / 60, 1)
+        
+        writer.writerow([
+            ticket.id,
+            ticket.daily_id,
+            ticket.created_at.strftime("%Y-%m-%d %H:%M") if ticket.created_at else "",
+            ticket.closed_at.strftime("%Y-%m-%d %H:%M") if ticket.closed_at else "",
+            ticket.status.value if ticket.status else "",
+            ticket.priority.value if ticket.priority else "",
+            ticket.category.name if ticket.category else "",
+            ticket.user.full_name if ticket.user else "",
+            ticket.user.external_id if ticket.user else "",
+            ticket.assigned_staff.username if ticket.assigned_staff else "",
+            first_response_mins if first_response_mins else "",
+            ticket.rating if ticket.rating else "",
+            (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+        ])
+    
+    # Prepare file
+    csv_content = output.getvalue()
+    output.close()
+    
+    # Send file
+    filename = f"tickets_export_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
+    file = BufferedInputFile(
+        csv_content.encode('utf-8-sig'),  # BOM for Excel compatibility
+        filename=filename
+    )
+    
+    await message.answer_document(
+        file,
+        caption=f"📊 Экспорт тикетов за {days} дней\n"
+                f"Всего: {len(tickets)} записей"
+    )
+
 
 # --- ОБРАБОТКА ОТВЕТОВ (Диалог) ---
 
