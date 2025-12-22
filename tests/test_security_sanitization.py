@@ -2,7 +2,7 @@ import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from database.models import Base
+from database.models import Base, User, SourceType, Category
 from services.ticket_service import create_ticket, add_message_to_ticket
 
 # Setup in-memory DB
@@ -203,3 +203,82 @@ async def test_history_sanitization(test_session):
 
     assert "&lt;b&gt;HACK&lt;/b&gt;" in sent_text
     assert "<b>HACK</b>" not in sent_text
+
+@pytest.mark.asyncio
+async def test_staff_notification_injection_via_profile(test_session):
+    """
+    ATTACK VECTOR: Stored XSS / HTML Injection via User Profile (Group/Department)
+
+    1. A malicious user registers or updates their profile with HTML tags in 'group' or 'department'.
+       e.g. Group = "<b>HACK</b>" or "<script>" or "<a href...>"
+    2. The input is saved to the DB without sanitization (which is acceptable for storage).
+    3. The user creates a ticket.
+    4. The system sends a notification to the Staff Chat.
+    5. The notification builder inserts the user's group/department into the message template.
+    6. If the builder uses f-strings with `parse_mode='HTML'` WITHOUT escaping the profile data,
+       the malicious HTML is rendered (or breaks the message if invalid).
+    """
+
+    # 1. Setup malicious user in DB
+    user_id = 666
+    malicious_group = "<b>PWN</b>"
+    malicious_dept = "<a href='evil.com'>DEPT</a>"
+
+    # Create user manually to bypass registration handlers
+    user = User(
+        external_id=user_id,
+        source=SourceType.TELEGRAM,
+        full_name="Hacker",
+        username="hacker",
+        group_number=malicious_group, # INJECTION POINT 1
+        department=malicious_dept,    # INJECTION POINT 2
+        course=1,
+        is_head_student=False
+    )
+    test_session.add(user)
+
+    # Create category
+    category = Category(name="General")
+    test_session.add(category)
+    await test_session.commit()
+
+    # 2. Mock Bot
+    bot = AsyncMock()
+    # Mock return value for send_message to avoid errors in service
+    sent_msg = MagicMock()
+    sent_msg.message_id = 12345
+    bot.send_message.return_value = sent_msg
+
+    # 3. Trigger Ticket Creation (which triggers notification)
+    await create_ticket(
+        test_session,
+        user_id=user_id,
+        source="tg",
+        text="Valid ticket text",
+        bot=bot,
+        category_name="General",
+        user_full_name="Hacker"
+    )
+
+    # 4. Inspect the message sent to Staff Chat
+    assert bot.send_message.called
+    args, kwargs = bot.send_message.call_args
+    sent_text = args[1]
+    parse_mode = kwargs.get('parse_mode')
+
+    # Ensure HTML parsing is ON (prerequisite for the attack)
+    assert parse_mode == "HTML"
+
+    # VERIFY FIX
+    # We assert that the UNESCAPED tag IS NOT present.
+    # And the ESCAPED tag IS present.
+
+    if "<b>PWN</b>" in sent_text:
+         pytest.fail("VULNERABILITY DETECTED: Group name was injected as raw HTML.")
+
+    if "<a href='evil.com'>DEPT</a>" in sent_text:
+         pytest.fail("VULNERABILITY DETECTED: Department was injected as raw HTML.")
+
+    # Check for escaped versions
+    assert "&lt;b&gt;PWN&lt;/b&gt;" in sent_text
+    assert "&lt;a href=&#x27;evil.com&#x27;&gt;DEPT&lt;/a&gt;" in sent_text or "&lt;a href='evil.com'&gt;DEPT&lt;/a&gt;" in sent_text
