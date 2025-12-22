@@ -196,8 +196,9 @@ async def show_faq(callback: types.CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
+    safe_name = html.escape(callback.from_user.first_name or "")
     await callback.message.edit_text(
-        f"Привет, {callback.from_user.first_name}! 👋\nВыберите тему обращения:",
+        f"Привет, {safe_name}! 👋\nВыберите тему обращения:",
         reply_markup=get_menu_kb()
     )
 

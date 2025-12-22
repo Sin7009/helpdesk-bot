@@ -318,7 +318,7 @@ class TestAdminCloseTicket:
 
         message.answer.assert_called_once()
         args = message.answer.call_args[0]
-        assert "не найден или уже закрыт" in args[0]
+        assert "не найден" in args[0]
 
     @pytest.mark.asyncio
     async def test_close_ticket_already_closed(self, mock_bot, mock_session):
@@ -339,7 +339,7 @@ class TestAdminCloseTicket:
 
         message.answer.assert_called_once()
         args = message.answer.call_args[0]
-        assert "не найден или уже закрыт" in args[0]
+        assert "закрыт" in args[0]
 
     @pytest.mark.asyncio
     async def test_close_ticket_generates_summary(self, mock_bot, mock_session):

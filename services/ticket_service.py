@@ -338,7 +338,7 @@ async def _send_staff_notification(
     admin_text = f"{template_start}{safe_text}{template_end}"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_ticket_{ticket.id}")]
+        [InlineKeyboardButton(text="🔒 Закрыть тикет", callback_data=f"close_{ticket.id}")]
     ])
 
     try:
