@@ -284,6 +284,9 @@ async def _send_staff_notification(
     # Убираем пустые значения и склеиваем
     meta_str = " | ".join(filter(None, user_meta))
 
+    # Экранируем мета-данные, так как они могут содержать пользовательский ввод (группа, департамент)
+    meta_str = html.escape(meta_str)
+
     # Old student_info logic is replaced by the new header format
     # But wait, template_start uses student_info.
     # The requirement says:
