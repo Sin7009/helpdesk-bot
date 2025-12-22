@@ -190,10 +190,17 @@ async def add_message_to_ticket(
         media_id: File ID if present
         content_type: Type of content
         
+    Raises:
+        ValueError: If content_type is "photo" or "document" but media_id is None
+        
     Note:
         The ticket object must have its user and category relationships
         pre-loaded (via selectinload) to avoid lazy-loading issues.
     """
+    # Validate media-only messages
+    if content_type in ("photo", "document") and not media_id:
+        raise ValueError(f"media_id is required when content_type is '{content_type}'")
+    
     # Re-open if closed
     if ticket.status == TicketStatus.CLOSED:
         ticket.status = TicketStatus.IN_PROGRESS

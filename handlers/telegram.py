@@ -5,12 +5,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 import html
 
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
 from services.faq_service import FAQService
-from database.models import Ticket, TicketStatus, User, FAQ, SourceType, Category
+from database.models import Ticket, TicketStatus, User, SourceType
 from database.repositories.user_repository import UserRepository
 
 from core.config import settings
@@ -403,13 +404,13 @@ async def show_ticket_detail(callback: types.CallbackQuery, session: AsyncSessio
     text = (
         f"🎫 <b>Заявка #{ticket.daily_id}</b>\n"
         f"📅 Дата: {date_str}\n"
-        f"📂 Категория: {cat_name}\n"
+        f"📂 Категория: {html.escape(cat_name)}\n"
         f"📊 Статус: <b>{status_text}</b>\n\n"
-        f"📝 <b>Вопрос:</b>\n{ticket.question_text}\n"
+        f"📝 <b>Вопрос:</b>\n{html.escape(ticket.question_text or '')}\n"
     )
 
     if ticket.summary:
-        text += f"\n📋 <b>Итог:</b>\n{ticket.summary}\n"
+        text += f"\n📋 <b>Итог:</b>\n{html.escape(ticket.summary)}\n"
 
     # Buttons
     btns = []
@@ -462,27 +463,44 @@ async def process_comment(message: types.Message, state: FSMContext, session: As
     result = await session.execute(stmt)
     ticket = result.scalar_one_or_none()
 
-    if ticket:
-        # Extract content
-        text = message.text or message.caption or ""
-        media_id = None
-        content_type = "text"
-
-        if message.photo:
-            content_type = "photo"
-            media_id = message.photo[-1].file_id
-        elif message.document:
-            content_type = "document"
-            media_id = message.document.file_id
-
-        await add_message_to_ticket(
-            session, ticket, text, bot,
-            media_id=media_id, content_type=content_type
-        )
-
-        await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
-    else:
+    if not ticket:
         await message.answer("❌ Заявка не найдена.")
+        await state.clear()
+        return
+
+    # Verify ownership: ticket must belong to the current user
+    user_res = await session.execute(select(User).where(User.external_id == message.from_user.id))
+    user = user_res.scalar_one_or_none()
+
+    if not user or ticket.user_id != user.id:
+        await message.answer("❌ Ошибка доступа. Вы не можете добавлять комментарии к чужим заявкам.")
+        await state.clear()
+        return
+
+    # Extract content
+    text = message.text or message.caption or ""
+    media_id = None
+    content_type = "text"
+
+    if message.photo:
+        content_type = "photo"
+        media_id = message.photo[-1].file_id
+    elif message.document:
+        content_type = "document"
+        media_id = message.document.file_id
+
+    # Validate media-only messages: if content_type is not "text", media_id must be present
+    if content_type != "text" and not media_id:
+        await message.answer("❌ Ошибка: не удалось получить файл. Попробуйте снова.")
+        await state.clear()
+        return
+
+    await add_message_to_ticket(
+        session, ticket, text, bot,
+        media_id=media_id, content_type=content_type
+    )
+
+    await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
 
     await state.clear()
     # Optionally show the ticket details again?

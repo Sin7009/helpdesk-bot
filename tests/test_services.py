@@ -83,3 +83,69 @@ async def test_ticket_flow(test_session):
     # Verify no active ticket
     active_ticket = await get_active_ticket(test_session, 12345, "tg")
     assert active_ticket is None
+
+
+@pytest.mark.asyncio
+async def test_add_message_to_ticket_media_validation(test_session):
+    """Test add_message_to_ticket validates media_id when content_type requires it."""
+    from unittest.mock import MagicMock, AsyncMock
+    
+    bot = AsyncMock()
+    mock_message = MagicMock()
+    mock_message.message_id = 12345
+    bot.send_message.return_value = mock_message
+
+    # Create a ticket first
+    ticket = await create_ticket(
+        test_session,
+        user_id=12345,
+        source="tg",
+        text="Help me",
+        bot=bot,
+        category_name="General",
+        user_full_name="Test User"
+    )
+
+    # Test: content_type is "photo" but media_id is None should raise ValueError
+    with pytest.raises(ValueError) as exc_info:
+        await add_message_to_ticket(
+            test_session,
+            ticket,
+            text="",
+            bot=bot,
+            media_id=None,
+            content_type="photo"
+        )
+    assert "media_id is required" in str(exc_info.value)
+
+    # Test: content_type is "document" but media_id is None should raise ValueError
+    with pytest.raises(ValueError) as exc_info:
+        await add_message_to_ticket(
+            test_session,
+            ticket,
+            text="",
+            bot=bot,
+            media_id=None,
+            content_type="document"
+        )
+    assert "media_id is required" in str(exc_info.value)
+
+    # Test: content_type is "text" with None media_id should work fine
+    await add_message_to_ticket(
+        test_session,
+        ticket,
+        text="Text message",
+        bot=bot,
+        media_id=None,
+        content_type="text"
+    )
+
+    # Test: Valid photo with media_id should work
+    await add_message_to_ticket(
+        test_session,
+        ticket,
+        text="Photo caption",
+        bot=bot,
+        media_id="photo_file_id_123",
+        content_type="photo"
+    )
