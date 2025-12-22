@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User as TgUser, Chat
 from database.models import User, Ticket, TicketStatus, Category
-from handlers.telegram import cmd_start, select_cat, handle_text, TicketForm
+from handlers.telegram import cmd_start, select_cat, handle_message_content, TicketForm
 from core.config import settings
 
 @pytest.fixture
@@ -120,7 +120,7 @@ async def test_handle_text_ignore_staff(mock_session, mock_state, mock_bot):
     message.chat.id = settings.TG_STAFF_CHAT_ID
     message.answer = AsyncMock()
 
-    await handle_text(message, mock_state, mock_bot, mock_session)
+    await handle_message_content(message, mock_state, mock_bot, mock_session)
 
     message.answer.assert_not_called()
 
@@ -132,6 +132,8 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
     message.from_user = MagicMock(spec=TgUser)
     message.from_user.id = 123
     message.text = "Additional info"
+    message.photo = None
+    message.document = None
     message.from_user.full_name = "User"
     message.answer = AsyncMock()
 
@@ -145,7 +147,7 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
         mock_ticket = MagicMock()
         mock_get_active_ticket.return_value = mock_ticket
 
-        await handle_text(message, mock_state, mock_bot, mock_session)
+        await handle_message_content(message, mock_state, mock_bot, mock_session)
 
         mock_add_message.assert_called_once()
         message.answer.assert_called_with("✅ Сообщение добавлено к диалогу.")
@@ -160,6 +162,8 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
     message.from_user = MagicMock(spec=TgUser)
     message.from_user.id = 123
     message.text = "My question"
+    message.photo = None
+    message.document = None
     message.from_user.full_name = "User"
     message.answer = AsyncMock()
 
@@ -178,7 +182,7 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
         ticket.daily_id = 999
         mock_create_ticket.return_value = ticket
 
-        await handle_text(message, mock_state, mock_bot, mock_session)
+        await handle_message_content(message, mock_state, mock_bot, mock_session)
 
         # Check that the success message is called and contains expected info
         args, kwargs = message.answer.call_args

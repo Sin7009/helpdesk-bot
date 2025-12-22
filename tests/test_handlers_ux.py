@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User as TgUser
-from handlers.telegram import select_cat, handle_text, TicketForm
+from handlers.telegram import select_cat, handle_message_content, TicketForm
 from database.models import SourceType
 
 @pytest.fixture
@@ -37,6 +37,8 @@ async def test_handle_text_saves_unsolicited_text(mock_session, mock_state, mock
     message.from_user = MagicMock(spec=TgUser)
     message.from_user.id = 123
     message.text = "Unsolicited question"
+    message.photo = None
+    message.document = None
     message.answer = AsyncMock()
 
     # Mock no active ticket and no FAQ match
@@ -47,7 +49,7 @@ async def test_handle_text_saves_unsolicited_text(mock_session, mock_state, mock
         mock_get_active_ticket.return_value = None
         mock_state.get_state.return_value = None
 
-        await handle_text(message, mock_state, mock_bot, mock_session)
+        await handle_message_content(message, mock_state, mock_bot, mock_session)
 
         # Verify text was saved
         mock_state.update_data.assert_called_with(saved_text="Unsolicited question")
@@ -84,7 +86,7 @@ async def test_select_cat_uses_saved_text(mock_session, mock_state, mock_bot):
         # Verify create_ticket called with saved text
         # Use SourceType.TELEGRAM for correct assertion
         mock_create_ticket.assert_called_with(
-            mock_session, 123, SourceType.TELEGRAM, "Saved question", mock_bot, "Учеба", "User Name"
+            mock_session, 123, SourceType.TELEGRAM, "Saved question", mock_bot, "Учеба", "User Name", media_id=None, content_type="text"
         )
 
         # Verify state cleared and success message shown
