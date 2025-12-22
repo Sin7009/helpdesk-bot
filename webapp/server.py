@@ -6,8 +6,6 @@ Provides endpoints for:
 - Admin panel (future)
 """
 import logging
-import html
-import json
 from aiohttp import web
 from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload

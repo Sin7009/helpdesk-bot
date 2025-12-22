@@ -49,7 +49,7 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+asyncpg://helpdesk:${POSTGRES_PASSWORD:-helpdesk_secret}@postgres:5432/helpdesk
-    command: ["python", "-c", "import asyncio; from webapp.server import start_webapp; loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); loop.run_until_complete(start_webapp()); loop.run_forever()"]
+    command: ["python", "start_webapp.py"]
 
 volumes:
   postgres_data:

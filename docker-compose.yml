@@ -26,7 +26,7 @@ services:
 #      - ./data:/app/data
 #    environment:
 #      - DB_NAME=/app/data/support.db
-#    command: ["python", "-c", "import asyncio; from webapp.server import start_webapp; loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); loop.run_until_complete(start_webapp()); loop.run_forever()"]
+#    command: ["python", "start_webapp.py"]
 
 # To use PostgreSQL instead of SQLite, uncomment the following and update .env:
 # 

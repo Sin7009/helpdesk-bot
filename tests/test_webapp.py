@@ -1,7 +1,6 @@
 """Tests for Telegram Mini App web server."""
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 from unittest.mock import patch, AsyncMock, MagicMock
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
