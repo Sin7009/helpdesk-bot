@@ -1,7 +1,7 @@
 import datetime
 from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import BigInteger, ForeignKey, String, Text, DateTime, Integer, func
+from sqlalchemy import BigInteger, ForeignKey, String, Text, DateTime, Integer, Boolean, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
@@ -46,6 +46,8 @@ class User(Base):
     student_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     department: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     course: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    group_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    is_head_student: Mapped[bool] = mapped_column(Boolean, default=False)
     
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

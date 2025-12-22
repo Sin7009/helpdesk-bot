@@ -31,17 +31,29 @@ def mock_state():
     return state
 
 @pytest.mark.asyncio
-async def test_cmd_start(mock_state):
+async def test_cmd_start(mock_state, mock_session):
     message = AsyncMock(spec=Message)
     message.from_user = MagicMock(spec=TgUser)
     message.from_user.first_name = "TestUser"
+    message.from_user.id = 123
+    message.from_user.full_name = "TestUser Full"
+    message.from_user.username = "testuser"
     message.answer = AsyncMock()
 
-    await cmd_start(message, mock_state)
+    # Mock UserRepository.get_or_create to return a user with group_number set
+    with patch("handlers.telegram.UserRepository") as MockUserRepository:
+        mock_repo = AsyncMock()
+        mock_user = MagicMock()
+        mock_user.group_number = "IVT-201"  # User has registered group
+        mock_user.full_name = "TestUser Full"
+        mock_repo.get_or_create.return_value = mock_user
+        MockUserRepository.return_value = mock_repo
 
-    mock_state.clear.assert_called_once()
-    message.answer.assert_called_once()
-    assert "Привет, TestUser" in message.answer.call_args[0][0]
+        await cmd_start(message, mock_state, mock_session)
+
+        mock_state.clear.assert_called_once()
+        message.answer.assert_called_once()
+        assert "Привет, TestUser" in message.answer.call_args[0][0]
 
 @pytest.mark.asyncio
 async def test_select_cat_active_ticket(mock_session, mock_state, mock_bot):
