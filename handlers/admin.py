@@ -51,6 +51,83 @@ async def is_root_admin(user_id: int) -> bool:
     """
     return user_id == settings.TG_ADMIN_ID
 
+
+def _get_rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    """Create rating keyboard for closed ticket.
+    
+    Args:
+        ticket_id: ID of the ticket
+        
+    Returns:
+        InlineKeyboardMarkup with rating buttons
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⭐", callback_data=f"rate_{ticket_id}_1"),
+            InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{ticket_id}_2"),
+            InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{ticket_id}_3")
+        ],
+        [
+            InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{ticket_id}_4"),
+            InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{ticket_id}_5")
+        ]
+    ])
+
+
+async def _close_ticket_with_summary(
+    session: AsyncSession,
+    ticket: Ticket,
+    bot: Bot
+) -> bool:
+    """Close a ticket, generate summary and notify user.
+    
+    This helper function consolidates the ticket closing logic:
+    1. Generates AI summary from messages
+    2. Sets ticket status to CLOSED
+    3. Sends rating request to user
+    
+    Args:
+        session: Database session
+        ticket: Ticket object (must have user relationship loaded)
+        bot: Bot instance for notifications
+        
+    Returns:
+        True if ticket was closed successfully, False otherwise
+    """
+    if ticket.status == TicketStatus.CLOSED:
+        return False
+    
+    # 1. Generate summary before closing (if messages exist)
+    msgs_stmt = select(Message).where(Message.ticket_id == ticket.id).order_by(Message.created_at)
+    msgs_result = await session.execute(msgs_stmt)
+    messages_list = msgs_result.scalars().all()
+    
+    if messages_list:
+        dialogue_text = LLMService.format_dialogue(messages_list)
+        summary = await LLMService.generate_summary(dialogue_text)
+        ticket.summary = summary
+        logger.info(f"Generated summary for ticket #{ticket.id}: {summary}")
+    
+    # 2. Close the ticket
+    ticket.status = TicketStatus.CLOSED
+    ticket.closed_at = func.now()
+    await session.commit()
+    
+    # 3. Notify user with rating request
+    try:
+        await bot.send_message(
+            ticket.user.external_id,
+            "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
+            "Пожалуйста, оцените качество помощи:",
+            parse_mode="HTML",
+            reply_markup=_get_rating_keyboard(ticket.id)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send rating request to user {ticket.user.external_id}: {e}")
+    
+    return True
+
+
 # --- УПРАВЛЕНИЕ (Модераторы / FAQ / Категории) ---
 
 @router.message(Command("add_category"))
@@ -399,52 +476,14 @@ async def admin_close_ticket(message: types.Message, command: CommandObject, bot
         result = await session.execute(stmt)
         ticket = result.scalar_one_or_none()
 
-        if ticket and ticket.status != TicketStatus.CLOSED:
-            # 1. Generate summary before closing (if messages exist)
-            msgs_stmt = select(Message).where(Message.ticket_id == ticket.id).order_by(Message.created_at)
-            msgs_result = await session.execute(msgs_stmt)
-            messages_list = msgs_result.scalars().all()
-            
-            if messages_list:
-                dialogue_text = LLMService.format_dialogue(messages_list)
-                # Call Gemini (async and fast)
-                summary = await LLMService.generate_summary(dialogue_text)
-                ticket.summary = summary
-                
-                # Log for verification
-                logger.info(f"Generated summary for ticket #{ticket.id}: {summary}")
-            
-            # 2. Now close the ticket
-            ticket.status = TicketStatus.CLOSED
-            ticket.closed_at = func.now()
-            await session.commit()
-
-            # Try notify user with rating request
-            try:
-                rating_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="⭐", callback_data=f"rate_{ticket.id}_1"),
-                        InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{ticket.id}_2"),
-                        InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{ticket.id}_3")
-                    ],
-                    [
-                        InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_4"),
-                        InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_5")
-                    ]
-                ])
-                await bot.send_message(
-                    ticket.user.external_id,
-                    "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
-                    "Пожалуйста, оцените качество помощи:",
-                    parse_mode="HTML",
-                    reply_markup=rating_kb
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send rating request to user {ticket.user.external_id}: {e}")
-
-            await message.answer(f"Тикет #{t_id} закрыт.")
+        if ticket:
+            closed = await _close_ticket_with_summary(session, ticket, bot)
+            if closed:
+                await message.answer(f"Тикет #{t_id} закрыт.")
+            else:
+                await message.answer("Тикет уже закрыт.")
         else:
-            await message.answer("Тикет не найден или уже закрыт.")
+            await message.answer("Тикет не найден.")
     except ValueError:
         await message.answer("Формат: /close ID")
             
@@ -461,71 +500,32 @@ async def close_ticket_btn(callback: types.CallbackQuery, bot: Bot):
         result = await session.execute(stmt)
         ticket = result.scalar_one_or_none()
         
-        if ticket and ticket.status != TicketStatus.CLOSED:
-            # 1. Generate summary before closing (if messages exist)
-            msgs_stmt = select(Message).where(Message.ticket_id == ticket.id).order_by(Message.created_at)
-            msgs_result = await session.execute(msgs_stmt)
-            messages_list = msgs_result.scalars().all()
-            
-            if messages_list:
-                dialogue_text = LLMService.format_dialogue(messages_list)
-                # Call Gemini (async and fast)
-                summary = await LLMService.generate_summary(dialogue_text)
-                ticket.summary = summary
-                
-                # Log for verification
-                logger.info(f"Generated summary for ticket #{ticket.id}: {summary}")
-            
-            # 2. Now close the ticket
-            ticket.status = TicketStatus.CLOSED
-            ticket.closed_at = func.now()
-            await session.commit()
-            
-            # Уведомляем студента с запросом оценки
-            try:
-                rating_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="⭐", callback_data=f"rate_{ticket.id}_1"),
-                        InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{ticket.id}_2"),
-                        InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{ticket.id}_3")
-                    ],
-                    [
-                        InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_4"),
-                        InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{ticket.id}_5")
-                    ]
-                ])
-                await bot.send_message(
-                    ticket.user.external_id,
-                    "✅ <b>Ваш вопрос решен. Диалог закрыт.</b>\n\n"
-                    "Пожалуйста, оцените качество помощи:",
-                    parse_mode="HTML",
-                    reply_markup=rating_kb
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send rating request to user {ticket.user.external_id}: {e}")
-            
-            # Экранируем текст сообщения перед редактированием, так как используем parse_mode="HTML"
-            # и callback.message.text возвращает простой текст, который может содержать спецсимволы (<, >)
-            original_text = callback.message.text
+        if ticket:
+            closed = await _close_ticket_with_summary(session, ticket, bot)
+            if closed:
+                # Экранируем текст сообщения перед редактированием, так как используем parse_mode="HTML"
+                # и callback.message.text возвращает простой текст, который может содержать спецсимволы (<, >)
+                original_text = callback.message.text
 
-            if original_text:
-                safe_text = html.escape(original_text)
-                await callback.message.edit_text(f"{safe_text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
-            elif callback.message.caption:
-                # Если это медиа с подписью, мы не можем превратить его в текст через edit_text
-                # Лучше просто удалить кнопки (edit_reply_markup) и отправить новое сообщение, или оставить как есть
-                await callback.message.edit_reply_markup(reply_markup=None)
-                await callback.message.reply("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
-            else:
-                # Если ничего нет (странно), просто пишем ответ
-                await callback.message.answer("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
-                # И убираем кнопки
-                try:
+                if original_text:
+                    safe_text = html.escape(original_text)
+                    await callback.message.edit_text(f"{safe_text}\n\n✅ <b>ЗАКРЫТО</b>", parse_mode="HTML")
+                elif callback.message.caption:
+                    # Если это медиа с подписью, мы не можем превратить его в текст через edit_text
+                    # Лучше просто удалить кнопки (edit_reply_markup) и отправить новое сообщение
                     await callback.message.edit_reply_markup(reply_markup=None)
-                except Exception as e:
-                    logger.warning(f"Failed to edit reply markup: {e}")
+                    await callback.message.reply("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
+                else:
+                    # Если ничего нет (странно), просто пишем ответ
+                    await callback.message.answer("✅ <b>Тикет закрыт.</b>", parse_mode="HTML")
+                    try:
+                        await callback.message.edit_reply_markup(reply_markup=None)
+                    except Exception as e:
+                        logger.warning(f"Failed to edit reply markup: {e}")
+            else:
+                await callback.answer("Тикет уже закрыт.")
         else:
-            await callback.answer("Тикет уже закрыт или не найден.")
+            await callback.answer("Тикет не найден.")
 
 async def process_reply(
     bot: Bot,

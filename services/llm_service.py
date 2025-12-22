@@ -8,7 +8,7 @@ import logging
 import aiohttp
 from typing import Optional
 from core.config import settings
-from database.models import Message
+from database.models import Message, SenderRole
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,6 @@ class LLMService:
         """
         lines = []
         for msg in messages:
-            role = "Студент" if msg.sender_role == "user" else "Поддержка"
+            role = "Студент" if msg.sender_role == SenderRole.USER else "Поддержка"
             lines.append(f"{role}: {msg.text}")
         return "\n".join(lines)
