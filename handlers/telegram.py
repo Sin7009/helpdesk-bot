@@ -2,7 +2,7 @@ from aiogram import Router, F, Bot, types
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -40,14 +40,25 @@ class CommentForm(StatesGroup):
 
 # --- КЛАВИАТУРЫ ---
 def get_menu_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = [
         [InlineKeyboardButton(text="🎓 Учеба", callback_data="cat_study"),
          InlineKeyboardButton(text="📄 Справки", callback_data="cat_docs")],
         [InlineKeyboardButton(text="💻 IT / ЛК", callback_data="cat_it"),
          InlineKeyboardButton(text="🏠 Общежитие", callback_data="cat_dorm")],
         [InlineKeyboardButton(text="❓ Частые вопросы", callback_data="show_faq")],
         [InlineKeyboardButton(text="📂 Мои заявки", callback_data="my_tickets")]
-    ])
+    ]
+    
+    # Add Mini App button if WEBAPP_URL is configured
+    if settings.WEBAPP_URL:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="📱 Открыть приложение",
+                web_app=WebAppInfo(url=f"{settings.WEBAPP_URL}/webapp/tickets")
+            )
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[

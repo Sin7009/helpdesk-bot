@@ -1,0 +1,55 @@
+# Docker Compose configuration for PostgreSQL deployment
+# Use this file with: docker-compose -f docker-compose.postgres.yml up -d
+#
+# Before running, set in .env:
+#   DATABASE_URL=postgresql+asyncpg://helpdesk:your_secure_password@postgres:5432/helpdesk
+#   POSTGRES_PASSWORD=your_secure_password
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: helpdesk_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: helpdesk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-helpdesk_secret}
+      POSTGRES_DB: helpdesk
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helpdesk -d helpdesk"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    container_name: helpdesk_bot
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://helpdesk:${POSTGRES_PASSWORD:-helpdesk_secret}@postgres:5432/helpdesk
+
+  webapp:
+    build: .
+    container_name: helpdesk_webapp
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://helpdesk:${POSTGRES_PASSWORD:-helpdesk_secret}@postgres:5432/helpdesk
+    command: ["python", "-c", "import asyncio; from webapp.server import start_webapp; loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); loop.run_until_complete(start_webapp()); loop.run_forever()"]
+
+volumes:
+  postgres_data:

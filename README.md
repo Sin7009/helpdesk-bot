@@ -81,11 +81,12 @@
 <tr><td>🐍 Язык</td><td><a href="https://python.org">Python</a></td><td>3.12</td></tr>
 <tr><td>🤖 Telegram API</td><td><a href="https://github.com/aiogram/aiogram">aiogram</a></td><td>3.22+</td></tr>
 <tr><td>🗄 ORM</td><td><a href="https://sqlalchemy.org">SQLAlchemy</a></td><td>2.0 (Async)</td></tr>
-<tr><td>💾 База данных</td><td><a href="https://sqlite.org">SQLite</a> + <a href="https://github.com/omnilib/aiosqlite">aiosqlite</a></td><td>-</td></tr>
+<tr><td>💾 База данных</td><td><a href="https://sqlite.org">SQLite</a> / <a href="https://www.postgresql.org">PostgreSQL</a></td><td>16+</td></tr>
 <tr><td>🔄 Миграции</td><td><a href="https://alembic.sqlalchemy.org">Alembic</a></td><td>1.17+</td></tr>
 <tr><td>⚙️ Конфигурация</td><td><a href="https://docs.pydantic.dev/latest/concepts/pydantic_settings/">Pydantic Settings</a></td><td>2.12+</td></tr>
 <tr><td>⏰ Планировщик</td><td><a href="https://apscheduler.readthedocs.io">APScheduler</a></td><td>3.11+</td></tr>
 <tr><td>🤖 LLM</td><td><a href="https://openrouter.ai">OpenRouter API</a> (Gemini Flash)</td><td>-</td></tr>
+<tr><td>📱 Mini App</td><td><a href="https://docs.aiohttp.org">aiohttp</a></td><td>3.9+</td></tr>
 <tr><td>📦 Менеджер пакетов</td><td><a href="https://github.com/astral-sh/uv">uv</a></td><td>latest</td></tr>
 <tr><td>🧪 Тестирование</td><td><a href="https://pytest.org">pytest</a> + pytest-asyncio</td><td>9.0+</td></tr>
 <tr><td>🐳 Контейнеризация</td><td><a href="https://docker.com">Docker</a> + Docker Compose</td><td>-</td></tr>
@@ -174,9 +175,14 @@ python main.py
 | `TG_BOT_TOKEN` | ✅ | Токен бота от @BotFather | `123456:ABC-DEF...` |
 | `TG_ADMIN_ID` | ✅ | Telegram ID главного администратора | `123456789` |
 | `TG_STAFF_CHAT_ID` | ✅ | ID группы для обработки заявок | `-100123456789` |
-| `DB_NAME` | ❌ | Путь к файлу базы данных | `/app/data/support.db` |
+| `DB_NAME` | ❌ | Путь к файлу базы данных (SQLite) | `/app/data/support.db` |
+| `DATABASE_URL` | ❌ | URL подключения к PostgreSQL | `postgresql+asyncpg://user:pass@host:5432/db` |
 | `OPENROUTER_API_KEY` | ❌ | API ключ OpenRouter для LLM | `sk-or-v1-...` |
 | `LLM_MODEL_NAME` | ❌ | Модель LLM для генерации | `google/gemini-3-flash-preview` |
+| `WEBAPP_URL` | ❌ | URL Mini App для кнопки в боте | `https://your-domain.com` |
+| `WEBAPP_PORT` | ❌ | Порт для Mini App сервера | `8080` |
+
+> **💡 Примечание:** Если установлен `DATABASE_URL`, он используется вместо `DB_NAME`. Это позволяет легко переключаться между SQLite и PostgreSQL.
 
 ### Как получить ID чата
 
@@ -426,6 +432,13 @@ SLA метрики:
 
 ## 🗄 База данных и миграции
 
+### Поддерживаемые базы данных
+
+| База данных | Драйвер | Рекомендация |
+|-------------|---------|--------------|
+| **SQLite** | aiosqlite | Для разработки и небольших нагрузок |
+| **PostgreSQL** | asyncpg | Для продакшена и высоких нагрузок |
+
 ### Модели данных
 
 ```python
@@ -458,6 +471,30 @@ alembic downgrade -1
 
 > 📖 **Подробнее:** [ALEMBIC_GUIDE.md](ALEMBIC_GUIDE.md)
 
+### PostgreSQL (Продакшен)
+
+Для использования PostgreSQL:
+
+1. Запустите PostgreSQL (Docker или установленный):
+```bash
+docker run -d --name postgres \
+  -e POSTGRES_USER=helpdesk \
+  -e POSTGRES_PASSWORD=your_password \
+  -e POSTGRES_DB=helpdesk \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+2. Установите переменную окружения:
+```bash
+DATABASE_URL=postgresql+asyncpg://helpdesk:your_password@localhost:5432/helpdesk
+```
+
+3. Или используйте готовый docker-compose:
+```bash
+docker-compose -f docker-compose.postgres.yml up -d
+```
+
 ### Ручная миграция (legacy)
 
 Для совместимости сохранен скрипт миграции:
@@ -465,6 +502,33 @@ alembic downgrade -1
 ```bash
 python migrate_university_improvements.py
 ```
+
+---
+
+## 📱 Telegram Mini App
+
+Бот поддерживает Telegram Mini App для просмотра заявок через веб-интерфейс.
+
+### Настройка
+
+1. Разверните веб-сервер (см. docker-compose.yml)
+2. Настройте HTTPS (требуется для Mini App)
+3. Установите переменные окружения:
+```ini
+WEBAPP_URL=https://your-domain.com
+WEBAPP_PORT=8080
+```
+
+4. Зарегистрируйте Mini App в @BotFather:
+   - Отправьте `/newapp`
+   - Укажите URL: `https://your-domain.com/webapp/tickets`
+
+### Функции Mini App
+
+- 📂 Просмотр списка заявок
+- 🔍 Детали заявки с историей сообщений
+- ⭐ Отображение рейтинга и резюме
+- 🎨 Адаптивный интерфейс под тему Telegram
 
 ---
 
@@ -685,6 +749,8 @@ SQLite не поддерживает concurrent writes. Для высокой н
 - [x] Ежедневная статистика
 - [x] Миграции Alembic
 - [x] Docker + GHCR публикация
+- [x] Telegram Mini App (базовый интерфейс)
+- [x] Интеграция с PostgreSQL
 
 ### 🚧 В разработке
 
@@ -692,13 +758,11 @@ SQLite не поддерживает concurrent writes. Для высокой н
 - [ ] Рабочее время поддержки (автоответ в нерабочее время)
 - [ ] Напоминания о необработанных заявках
 - [ ] Экспорт статистики в CSV/Excel
-- [ ] Веб-интерфейс для администраторов
-- [ ] Интеграция с PostgreSQL
+- [ ] Веб-интерфейс для администраторов (расширенный)
 - [ ] Поддержка нескольких языков
 
 ### 💡 Идеи
 
-- [ ] Telegram Mini App для студентов
 - [ ] Интеграция с университетскими системами (ЛК, расписание)
 - [ ] Чат-бот с RAG для ответов на основе базы знаний
 - [ ] Мобильное приложение для администраторов

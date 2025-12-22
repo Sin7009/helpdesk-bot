@@ -33,6 +33,7 @@ dependencies = [
     "yarl==1.22.0",
     "apscheduler>=3.11.1",
     "alembic>=1.17.0",
+    "asyncpg>=0.30.0",
 ]
 
 [tool.pytest.ini_options]

@@ -11,3 +11,40 @@ services:
     environment:
       # Переопределяем путь к БД, чтобы она легла в volume
       - DB_NAME=/app/data/support.db
+
+# Optional: Web App service for Telegram Mini App
+# Uncomment to enable Mini App web interface
+#  webapp:
+#    build: .
+#    container_name: helpdesk_webapp
+#    restart: always
+#    env_file:
+#      - .env
+#    ports:
+#      - "8080:8080"
+#    volumes:
+#      - ./data:/app/data
+#    environment:
+#      - DB_NAME=/app/data/support.db
+#    command: ["python", "-c", "import asyncio; from webapp.server import start_webapp; loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); loop.run_until_complete(start_webapp()); loop.run_forever()"]
+
+# To use PostgreSQL instead of SQLite, uncomment the following and update .env:
+# 
+#  postgres:
+#    image: postgres:16-alpine
+#    container_name: helpdesk_postgres
+#    restart: always
+#    environment:
+#      POSTGRES_USER: helpdesk
+#      POSTGRES_PASSWORD: your_secure_password
+#      POSTGRES_DB: helpdesk
+#    volumes:
+#      - postgres_data:/var/lib/postgresql/data
+#    ports:
+#      - "5432:5432"
+#
+# volumes:
+#   postgres_data:
+#
+# Then set in .env:
+#   DATABASE_URL=postgresql+asyncpg://helpdesk:your_secure_password@postgres:5432/helpdesk
