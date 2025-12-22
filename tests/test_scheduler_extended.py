@@ -4,7 +4,7 @@ import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.models import Base, Ticket, Category, User, TicketStatus, SourceType, TicketPriority
-from services.scheduler import send_daily_statistics, send_weekly_faq_analysis, setup_scheduler
+from services.scheduler import send_daily_statistics, send_weekly_faq_analysis, setup_scheduler, send_stale_ticket_reminders
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -260,8 +260,8 @@ class TestSchedulerSetup:
 
             result = setup_scheduler(bot)
 
-            # Verify jobs are added
-            assert mock_scheduler.add_job.call_count == 2
+            # Verify jobs are added (daily stats, weekly analysis, stale reminders)
+            assert mock_scheduler.add_job.call_count == 3
             mock_scheduler.start.assert_called_once()
 
             # Check job configurations
@@ -279,3 +279,148 @@ class TestSchedulerSetup:
             assert second_call[0][0] == send_weekly_faq_analysis
             assert second_call[0][1] == 'cron'
             assert second_call[1]['day_of_week'] == 'sun'
+            
+            # Third call: stale ticket reminders
+            third_call = calls[2]
+            assert third_call[0][0] == send_stale_ticket_reminders
+            assert third_call[0][1] == 'interval'
+
+
+class TestStaleTicketReminders:
+    """Tests for send_stale_ticket_reminders."""
+
+    @pytest.mark.asyncio
+    async def test_no_stale_tickets(self):
+        """Test that no reminder is sent when there are no stale tickets."""
+        bot = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []  # No stale tickets
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = MagicMock()
+        mock_session_ctx.__aenter__.return_value = mock_session
+        mock_session_ctx.__aexit__.return_value = AsyncMock()
+
+        with patch('services.scheduler.new_session', return_value=mock_session_ctx):
+            await send_stale_ticket_reminders(bot)
+
+        bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_tickets_found(self, test_session):
+        """Test that reminder is sent when stale tickets exist."""
+        # Create test data
+        user = User(external_id=123, source=SourceType.TELEGRAM, full_name="Test User")
+        test_session.add(user)
+        await test_session.commit()
+
+        category = Category(name="IT")
+        test_session.add(category)
+        await test_session.commit()
+
+        # Create a stale ticket (created 5 hours ago, no response)
+        stale_time = datetime.datetime.now() - datetime.timedelta(hours=5)
+        ticket = Ticket(
+            user_id=user.id,
+            category_id=category.id,
+            source=SourceType.TELEGRAM,
+            status=TicketStatus.NEW,
+            daily_id=1,
+            question_text="Stale question",
+            created_at=stale_time,
+            priority=TicketPriority.HIGH,
+            first_response_at=None
+        )
+        test_session.add(ticket)
+        await test_session.commit()
+
+        bot = AsyncMock()
+
+        mock_session_ctx = MagicMock()
+        mock_session_ctx.__aenter__.return_value = test_session
+        mock_session_ctx.__aexit__.return_value = AsyncMock()
+
+        with patch('services.scheduler.new_session', return_value=mock_session_ctx), \
+             patch('services.scheduler.settings') as mock_settings:
+            mock_settings.STALE_TICKET_HOURS = 4
+            mock_settings.TG_STAFF_CHAT_ID = -100123456
+
+            await send_stale_ticket_reminders(bot)
+
+        bot.send_message.assert_called_once()
+        args, kwargs = bot.send_message.call_args
+        message_text = args[1]
+        
+        assert "Необработанные заявки" in message_text
+        assert "#1" in message_text
+
+    @pytest.mark.asyncio
+    async def test_stale_tickets_with_assigned_staff(self, test_session):
+        """Test reminder shows assigned staff when ticket is assigned."""
+        user = User(external_id=123, source=SourceType.TELEGRAM, full_name="Test User")
+        staff = User(
+            external_id=456, 
+            source=SourceType.TELEGRAM, 
+            full_name="Staff Member",
+            username="staff_user"
+        )
+        test_session.add(user)
+        test_session.add(staff)
+        await test_session.commit()
+
+        category = Category(name="Support")
+        test_session.add(category)
+        await test_session.commit()
+
+        stale_time = datetime.datetime.now() - datetime.timedelta(hours=5)
+        ticket = Ticket(
+            user_id=user.id,
+            category_id=category.id,
+            assigned_to=staff.id,
+            source=SourceType.TELEGRAM,
+            status=TicketStatus.IN_PROGRESS,
+            daily_id=1,
+            question_text="Assigned stale question",
+            created_at=stale_time,
+            priority=TicketPriority.NORMAL,
+            first_response_at=None
+        )
+        test_session.add(ticket)
+        await test_session.commit()
+
+        bot = AsyncMock()
+
+        mock_session_ctx = MagicMock()
+        mock_session_ctx.__aenter__.return_value = test_session
+        mock_session_ctx.__aexit__.return_value = AsyncMock()
+
+        with patch('services.scheduler.new_session', return_value=mock_session_ctx), \
+             patch('services.scheduler.settings') as mock_settings:
+            mock_settings.STALE_TICKET_HOURS = 4
+            mock_settings.TG_STAFF_CHAT_ID = -100123456
+
+            await send_stale_ticket_reminders(bot)
+
+        bot.send_message.assert_called_once()
+        args, kwargs = bot.send_message.call_args
+        message_text = args[1]
+        
+        assert "@staff_user" in message_text
+
+    @pytest.mark.asyncio
+    async def test_stale_tickets_error_handling(self):
+        """Test error handling in stale ticket reminders."""
+        bot = AsyncMock()
+
+        mock_session_ctx = MagicMock()
+        mock_session_ctx.__aenter__.side_effect = Exception("Database error")
+        mock_session_ctx.__aexit__.return_value = AsyncMock()
+
+        with patch('services.scheduler.new_session', return_value=mock_session_ctx):
+            # Should not raise exception
+            await send_stale_ticket_reminders(bot)
+
+        # No message should be sent on error
+        bot.send_message.assert_not_called()

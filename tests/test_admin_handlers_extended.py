@@ -643,3 +643,354 @@ class TestHandleRatingExtended:
             callback.answer.assert_called_once()
             args = callback.answer.call_args[0]
             assert "Неверная оценка" in args[0]
+
+
+class TestAssignTicketCommand:
+    """Tests for assign_ticket_cmd handler."""
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_no_args(self, mock_session):
+        """Test assign command without arguments."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args=None)
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args, kwargs = message.answer.call_args
+        assert "Формат" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_insufficient_args(self, mock_session):
+        """Test assign command with only ticket ID."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123")
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args, kwargs = message.answer.call_args
+        assert "Недостаточно аргументов" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_invalid_id(self, mock_session):
+        """Test assign command with non-numeric ticket ID."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="abc @moderator")
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "числом" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_not_found(self, mock_session):
+        """Test assign command when ticket doesn't exist."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="999 @moderator")
+
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "не найден" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_already_closed(self, mock_session):
+        """Test assign command on closed ticket."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123 @moderator")
+
+        ticket = MagicMock(spec=Ticket)
+        ticket.id = 123
+        ticket.status = TicketStatus.CLOSED
+
+        mock_session.execute.return_value.scalar_one_or_none.return_value = ticket
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "закрыт" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_staff_not_found(self, mock_session):
+        """Test assign command when staff member doesn't exist."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123 @unknown_user")
+
+        ticket = MagicMock(spec=Ticket)
+        ticket.id = 123
+        ticket.status = TicketStatus.NEW
+
+        # First call returns ticket, second call returns None (staff not found)
+        mock_session.execute.return_value.scalar_one_or_none.side_effect = [ticket, None]
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        assert message.answer.call_count == 1
+        args = message.answer.call_args[0]
+        assert "не найден" in args[0] or "не является модератором" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_success(self, mock_session):
+        """Test successful ticket assignment."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123 @moderator")
+
+        ticket = MagicMock(spec=Ticket)
+        ticket.id = 123
+        ticket.status = TicketStatus.NEW
+        ticket.assigned_staff = None
+
+        staff = MagicMock(spec=User)
+        staff.id = 456
+        staff.username = "moderator"
+        staff.role = UserRole.MODERATOR
+
+        # First call returns ticket, second call returns staff
+        mock_session.execute.return_value.scalar_one_or_none.side_effect = [ticket, staff]
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        assert ticket.assigned_to == 456
+        assert ticket.status == TicketStatus.IN_PROGRESS
+        mock_session.commit.assert_called_once()
+        
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "назначен" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_reassign(self, mock_session):
+        """Test reassigning ticket from one staff to another."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123 @new_mod")
+
+        old_staff = MagicMock(spec=User)
+        old_staff.username = "old_mod"
+
+        ticket = MagicMock(spec=Ticket)
+        ticket.id = 123
+        ticket.status = TicketStatus.IN_PROGRESS
+        ticket.assigned_staff = old_staff
+
+        new_staff = MagicMock(spec=User)
+        new_staff.id = 789
+        new_staff.username = "new_mod"
+        new_staff.role = UserRole.MODERATOR
+
+        # First call returns ticket, second call returns staff
+        mock_session.execute.return_value.scalar_one_or_none.side_effect = [ticket, new_staff]
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        assert ticket.assigned_to == 789
+        mock_session.commit.assert_called_once()
+        
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "переназначен" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_assign_ticket_non_admin(self, mock_session):
+        """Test non-admin cannot assign tickets."""
+        from handlers.admin import assign_ticket_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = 99999  # Not admin
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="assign", args="123 @moderator")
+
+        # Return regular user
+        regular_user = MagicMock(spec=User)
+        regular_user.role = UserRole.USER
+        mock_session.execute.return_value.scalar_one_or_none.return_value = regular_user
+
+        await assign_ticket_cmd(message, command, mock_session)
+
+        # Should not proceed - no message sent
+        message.answer.assert_not_called()
+
+
+class TestExportStatisticsCommand:
+    """Tests for export_statistics_cmd handler."""
+
+    @pytest.mark.asyncio
+    async def test_export_no_permission(self, mock_session):
+        """Test non-admin cannot export."""
+        from handlers.admin import export_statistics_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = 99999  # Not admin
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="export", args=None)
+
+        # Return regular user
+        regular_user = MagicMock(spec=User)
+        regular_user.role = UserRole.USER
+        mock_session.execute.return_value.scalar_one_or_none.return_value = regular_user
+
+        await export_statistics_cmd(message, command, mock_session)
+
+        # Should not proceed
+        message.answer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_export_invalid_days(self, mock_session):
+        """Test export with invalid days argument."""
+        from handlers.admin import export_statistics_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="export", args="abc")
+
+        await export_statistics_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "число" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_export_days_out_of_range(self, mock_session):
+        """Test export with days out of range."""
+        from handlers.admin import export_statistics_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="export", args="500")
+
+        await export_statistics_cmd(message, command, mock_session)
+
+        message.answer.assert_called_once()
+        args = message.answer.call_args[0]
+        assert "365" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_export_no_tickets(self, mock_session):
+        """Test export when no tickets exist."""
+        from handlers.admin import export_statistics_cmd
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+
+        command = CommandObject(prefix="/", command="export", args="7")
+
+        # Return empty list
+        mock_session.execute.return_value.scalars.return_value.all.return_value = []
+
+        await export_statistics_cmd(message, command, mock_session)
+
+        # Should show generating message then no tickets message
+        assert message.answer.call_count == 2
+        last_call = message.answer.call_args_list[-1]
+        assert "Нет тикетов" in last_call[0][0]
+
+    @pytest.mark.asyncio
+    async def test_export_success(self, mock_session):
+        """Test successful export with tickets."""
+        from handlers.admin import export_statistics_cmd
+        import datetime
+        
+        message = AsyncMock(spec=Message)
+        message.from_user = MagicMock(spec=TgUser)
+        message.from_user.id = settings.TG_ADMIN_ID
+        message.answer = AsyncMock()
+        message.answer_document = AsyncMock()
+
+        command = CommandObject(prefix="/", command="export", args="30")
+
+        # Create mock ticket
+        mock_user = MagicMock()
+        mock_user.full_name = "Test User"
+        mock_user.external_id = 123
+
+        mock_category = MagicMock()
+        mock_category.name = "IT"
+
+        mock_ticket = MagicMock(spec=Ticket)
+        mock_ticket.id = 1
+        mock_ticket.daily_id = 1
+        mock_ticket.created_at = datetime.datetime.now()
+        mock_ticket.closed_at = None
+        mock_ticket.status = TicketStatus.NEW
+        mock_ticket.priority = MagicMock()
+        mock_ticket.priority.value = "normal"
+        mock_ticket.category = mock_category
+        mock_ticket.user = mock_user
+        mock_ticket.assigned_staff = None
+        mock_ticket.first_response_at = None
+        mock_ticket.rating = None
+        mock_ticket.question_text = "Test question"
+
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [mock_ticket]
+
+        await export_statistics_cmd(message, command, mock_session)
+
+        # Should send document
+        message.answer_document.assert_called_once()
+        args, kwargs = message.answer_document.call_args
+        assert "Экспорт" in kwargs.get('caption', '')

@@ -11,6 +11,7 @@ import html
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
 from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
 from services.faq_service import FAQService
+from services.working_hours_service import is_within_working_hours, get_off_hours_message
 from database.models import Ticket, TicketStatus, User, SourceType
 from database.repositories.user_repository import UserRepository
 
@@ -228,13 +229,22 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
             media_id=media_id, content_type=content_type
         )
 
-        await callback.message.edit_text(
-            f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
-            f"Тема: {category_name}\n\n"
-            f"🕒 Оператор ответит в рабочее время.\n"
-            f"🔔 Вы получите уведомление об ответе.",
-            parse_mode="HTML"
-        )
+        # Check working hours and send appropriate message
+        if is_within_working_hours():
+            await callback.message.edit_text(
+                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
+                f"Тема: {category_name}\n\n"
+                f"🕒 Оператор ответит в рабочее время.\n"
+                f"🔔 Вы получите уведомление об ответе.",
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.edit_text(
+                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
+                f"Тема: {category_name}\n\n"
+                f"{get_off_hours_message()}",
+                parse_mode="HTML"
+            )
         await state.clear()
         return
 
@@ -307,12 +317,21 @@ async def handle_message_content(message: types.Message, state: FSMContext, bot:
             text, bot, category, message.from_user.full_name,
             media_id=media_id, content_type=content_type
         )
-        await message.answer(
-            f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
-            f"🕒 Оператор ответит в рабочее время.\n"
-            f"🔔 Вы получите уведомление об ответе.",
-            parse_mode="HTML"
-        )
+        
+        # Check working hours and send appropriate message
+        if is_within_working_hours():
+            await message.answer(
+                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
+                f"🕒 Оператор ответит в рабочее время.\n"
+                f"🔔 Вы получите уведомление об ответе.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
+                f"{get_off_hours_message()}",
+                parse_mode="HTML"
+            )
         await state.clear()
         return
 

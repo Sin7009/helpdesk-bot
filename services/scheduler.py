@@ -1,14 +1,17 @@
 import logging
 import datetime
+import html
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, func, and_
+from sqlalchemy.orm import selectinload
 from database.setup import new_session
-from database.models import Ticket, Category, TicketPriority
+from database.models import Ticket, Category, TicketPriority, TicketStatus, User
 from core.config import settings
 from aiogram import Bot
 
 from database.repositories.ticket_repository import TicketRepository
 from services.llm_service import LLMService
+from services.priority_service import get_priority_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +194,72 @@ async def send_weekly_faq_analysis(bot: Bot):
     except Exception as e:
         logger.error(f"Failed weekly analysis: {e}", exc_info=True)
 
+
+async def send_stale_ticket_reminders(bot: Bot):
+    """Send reminders about tickets that have been pending too long.
+    
+    Checks for tickets that are NEW or IN_PROGRESS but haven't received
+    a response within the configured threshold (STALE_TICKET_HOURS).
+    
+    Args:
+        bot: The Bot instance for sending messages.
+    """
+    logger.info("Checking for stale tickets...")
+
+    try:
+        threshold = datetime.datetime.now() - datetime.timedelta(hours=settings.STALE_TICKET_HOURS)
+
+        async with new_session() as session:
+            # Find stale tickets: NEW or IN_PROGRESS, no first response, created before threshold
+            stmt = (
+                select(Ticket)
+                .options(selectinload(Ticket.user), selectinload(Ticket.category), selectinload(Ticket.assigned_staff))
+                .where(
+                    and_(
+                        Ticket.status.in_([TicketStatus.NEW, TicketStatus.IN_PROGRESS]),
+                        Ticket.created_at < threshold,
+                        Ticket.first_response_at.is_(None)
+                    )
+                )
+                .order_by(Ticket.created_at.asc())
+                .limit(10)  # Limit to prevent spam
+            )
+            result = await session.execute(stmt)
+            stale_tickets = result.scalars().all()
+
+        if not stale_tickets:
+            logger.info("No stale tickets found.")
+            return
+
+        # Format reminder message
+        ticket_lines = []
+        for ticket in stale_tickets:
+            hours_pending = (datetime.datetime.now() - ticket.created_at.replace(tzinfo=None)).total_seconds() / 3600
+            priority_emoji = get_priority_emoji(ticket.priority)
+            category_name = ticket.category.name if ticket.category else "N/A"
+            user_name = html.escape(ticket.user.full_name or "Аноним") if ticket.user else "Неизвестно"
+            assigned = f"@{html.escape(ticket.assigned_staff.username)}" if ticket.assigned_staff else "не назначен"
+            
+            ticket_lines.append(
+                f"{priority_emoji} <b>#{ticket.daily_id}</b> ({category_name})\n"
+                f"   👤 {user_name} | ⏰ {hours_pending:.1f}ч назад\n"
+                f"   👷 Ответственный: {assigned}"
+            )
+
+        reminder_msg = (
+            f"⚠️ <b>Необработанные заявки ({len(stale_tickets)} шт.)</b>\n\n"
+            f"Следующие заявки ожидают ответа более {settings.STALE_TICKET_HOURS} часов:\n\n"
+            + "\n\n".join(ticket_lines) +
+            "\n\n<i>Используйте /assign для назначения или ответьте на сообщение в чате.</i>"
+        )
+
+        await bot.send_message(settings.TG_STAFF_CHAT_ID, reminder_msg, parse_mode="HTML")
+        logger.info(f"Sent stale ticket reminder for {len(stale_tickets)} tickets.")
+
+    except Exception as e:
+        logger.error(f"Failed to send stale ticket reminders: {e}", exc_info=True)
+
+
 def setup_scheduler(bot: Bot):
     scheduler = AsyncIOScheduler()
 
@@ -199,6 +268,14 @@ def setup_scheduler(bot: Bot):
 
     # Weekly analysis (Sunday, 20:00)
     scheduler.add_job(send_weekly_faq_analysis, 'cron', day_of_week='sun', hour=20, minute=0, args=[bot])
+
+    # Stale ticket reminders (every REMINDER_INTERVAL_MINUTES)
+    scheduler.add_job(
+        send_stale_ticket_reminders, 
+        'interval', 
+        minutes=settings.REMINDER_INTERVAL_MINUTES, 
+        args=[bot]
+    )
 
     scheduler.start()
     return scheduler
