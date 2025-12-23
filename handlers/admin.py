@@ -610,7 +610,9 @@ async def process_reply(
         # 🎨 Palette UX: Добавляем подсказку, как ответить
         reply_hint = "\n\n<i>(Чтобы ответить, просто отправьте сообщение)</i>" if not close else ""
 
-        reply_text = f"👨‍💼 <b>Ответ:</b>\n{text}{reply_hint}"
+        # FIX: Sanitize admin text to prevent HTML injection
+        safe_text = html.escape(text)
+        reply_text = f"👨‍💼 <b>Ответ:</b>\n{safe_text}{reply_hint}"
 
         if content_type == "photo" and media_id:
             await bot.send_photo(

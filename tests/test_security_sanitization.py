@@ -2,8 +2,10 @@ import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from database.models import Base, User, SourceType, Category
+from database.models import Base, User, SourceType, Category, Ticket, TicketStatus, TicketPriority
 from services.ticket_service import create_ticket, add_message_to_ticket
+from handlers.admin import process_reply
+from aiogram import Bot
 
 # Setup in-memory DB
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -282,3 +284,83 @@ async def test_staff_notification_injection_via_profile(test_session):
     # Check for escaped versions
     assert "&lt;b&gt;PWN&lt;/b&gt;" in sent_text
     assert "&lt;a href=&#x27;evil.com&#x27;&gt;DEPT&lt;/a&gt;" in sent_text or "&lt;a href='evil.com'&gt;DEPT&lt;/a&gt;" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_admin_reply_html_injection(test_session):
+    """
+    VULNERABILITY TEST: HTML Injection in Admin Replies.
+
+    Scenario:
+    1. An admin (or compromised mod) replies to a user.
+    2. The reply text contains malicious HTML (e.g., <a href="bad.site">Click me</a>).
+    3. The system constructs the message using f-string with parse_mode='HTML'.
+    4. If not escaped, the HTML is rendered.
+
+    The test fails if the mock_bot.send_message receives unescaped HTML.
+    """
+
+    # 1. Setup Data
+    user = User(
+        external_id=12345,
+        full_name="Student",
+        username="student",
+        source=SourceType.TELEGRAM
+    )
+    test_session.add(user)
+
+    category = Category(name="General")
+    test_session.add(category)
+    await test_session.flush()
+
+    ticket = Ticket(
+        user_id=user.id,
+        daily_id=1,
+        category_id=category.id,
+        status=TicketStatus.IN_PROGRESS,
+        question_text="Help me",
+        priority=TicketPriority.NORMAL,
+        source=SourceType.TELEGRAM
+    )
+    test_session.add(ticket)
+    await test_session.commit()
+
+    # 2. Mock Bot and Message
+    mock_bot = MagicMock(spec=Bot)
+    mock_bot.send_message = AsyncMock()
+    mock_bot.send_photo = AsyncMock()
+
+    mock_message = AsyncMock()
+    mock_message.answer = AsyncMock()
+    mock_message.react = AsyncMock()
+
+    # 3. Attack Payload
+    malicious_text = 'Check this: <a href="http://evil.com">Free iPhones</a>'
+
+    # 4. Execute Vulnerable Function
+    # process_reply calls bot.send_message(user_id, reply_text, parse_mode="HTML")
+    await process_reply(
+        bot=mock_bot,
+        session=test_session,
+        ticket_id=ticket.id,
+        text=malicious_text,
+        message=mock_message,
+        close=False,
+        ticket_obj=ticket
+    )
+
+    # 5. Verify the Vulnerability
+    # If the code is VULNERABLE, it will send the payload AS IS.
+    # If SECURE, it should send escaped text: &lt;a href=...
+
+    call_args = mock_bot.send_message.call_args
+    assert call_args is not None, "Bot should have sent a message"
+
+    sent_text = call_args[0][1] # (chat_id, text, ...)
+
+    print(f"\nSent Text: {sent_text}\n")
+
+    # Let's write it as a Security Test that expects CLEAN output.
+    # Failure means vulnerability.
+    assert "&lt;a href" in sent_text or "<a" not in sent_text, \
+        "VULNERABILITY DETECTED: HTML Injection in Admin Reply was rendered!"
