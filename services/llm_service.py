@@ -23,7 +23,26 @@ class LLMService:
     
     @classmethod
     async def _send_request(cls, payload: dict) -> str:
-        """Helper method to send requests to OpenRouter API."""
+        """Execute a POST request to the OpenRouter API with the provided payload.
+
+        This method handles:
+        - API Key validation (raises ValueError if missing).
+        - Header construction including HTTP-Referer for OpenRouter rankings.
+        - Asynchronous HTTP session management via aiohttp.
+        - Error handling for non-200 HTTP statuses.
+        - JSON response parsing and validation of the 'choices' structure.
+
+        Args:
+            payload (dict): The JSON payload containing model parameters,
+                messages, and other generation settings.
+
+        Returns:
+            str: The content of the first message choice from the API response.
+
+        Raises:
+            ValueError: If OPENROUTER_API_KEY is not configured.
+            Exception: If the API returns a non-200 status or an invalid JSON structure.
+        """
         if not settings.OPENROUTER_API_KEY:
             logger.warning("OPENROUTER_API_KEY is not set.")
             raise ValueError("API Key missing")
@@ -101,7 +120,7 @@ class LLMService:
             "3. Для каждой массовой проблемы предложи запись в FAQ в формате:\n"
             "   <b>Проблема:</b> [Описание] (X случаев)\n"
             "   <b>Решение:</b> [Текст ответа официальным тоном]\n"
-            "   <b>Команда:</b> /add_faq [триггер] [Текст ответа]\n\n"
+            "   <b>Триггер:</b> [Ключевое слово для поиска]\n\n"
             "Если массовых проблем нет, напиши 'Новых трендов для FAQ не выявлено'."
         )
 
