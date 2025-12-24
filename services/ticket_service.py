@@ -63,22 +63,45 @@ async def create_ticket(
 ) -> Ticket:
     """Create a new ticket for a user.
     
+    This function handles the full lifecycle of ticket creation:
+    1. Validates input (length, content).
+    2. Finds or creates the user in the database.
+    3. Finds or creates the requested category.
+    4. Atomically generates a new daily_id using TicketRepository.
+    5. Auto-detects priority based on keywords (e.g., "urgent").
+    6. Saves the ticket and the initial message.
+    7. Fetches user history to include in the staff notification.
+    8. Sends a notification to the staff chat.
+
     Args:
-        session: Database session
-        user_id: External user ID (Telegram ID)
-        source: Source platform ('tg' or 'vk')
-        text: Question text (optional if media provided)
-        bot: Bot instance for notifications
-        category_name: Category name for the ticket
-        user_full_name: User's full name (default: "Unknown")
-        media_id: File ID for photo/document
-        content_type: Type of content ('text', 'photo', 'document')
+        session: Database session (SQLAlchemy AsyncSession).
+        user_id: External user ID (Telegram ID).
+        source: Source platform (e.g., SourceType.TELEGRAM).
+        text: Question text (optional if media provided).
+        bot: Bot instance for sending notifications to staff.
+        category_name: Category name for the ticket (e.g., "IT").
+        user_full_name: User's full name (default: "Unknown").
+        media_id: File ID for photo/document (optional).
+        content_type: Type of content ('text', 'photo', 'document').
         
     Returns:
-        The created Ticket object
+        The created Ticket object.
         
     Raises:
-        ValueError: If text is empty (and no media) or too long
+        ValueError: If text is empty (and no media) or too long (>10000 chars).
+
+    Example:
+        >>> ticket = await create_ticket(
+        ...     session=db_session,
+        ...     user_id=123456789,
+        ...     source="tg",
+        ...     text="I can't login to my account",
+        ...     bot=bot_instance,
+        ...     category_name="IT",
+        ...     user_full_name="John Doe"
+        ... )
+        >>> print(ticket.daily_id)
+        1
     """
     # Validate inputs
     text = text.strip() if text else ""
