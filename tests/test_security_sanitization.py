@@ -1,11 +1,14 @@
 import pytest
 import html
+import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.models import Base, User, SourceType, Category, Ticket, TicketStatus, TicketPriority
 from services.ticket_service import create_ticket, add_message_to_ticket
-from handlers.admin import process_reply
+from handlers.admin import process_reply, export_statistics_cmd
 from aiogram import Bot
+from aiogram.filters import CommandObject
+from core.config import settings
 
 # Setup in-memory DB
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -364,3 +367,60 @@ async def test_admin_reply_html_injection(test_session):
     # Failure means vulnerability.
     assert "&lt;a href" in sent_text or "<a" not in sent_text, \
         "VULNERABILITY DETECTED: HTML Injection in Admin Reply was rendered!"
+
+
+@pytest.mark.asyncio
+async def test_csv_injection(test_session):
+    """
+    ATTACK VECTOR: CSV Injection (Formula Injection)
+
+    1. A malicious user creates a ticket with text starting with characters like =, +, -, @.
+       Example: "=cmd|' /C calc'!A0"
+    2. An admin exports statistics via /export command.
+    3. The system blindly writes the user input into the CSV file.
+    4. When the admin opens the CSV in Excel, the formula executes (launching calc, etc.).
+
+    This test verifies that the system sanitizes such input by prepending a single quote.
+    """
+    # 1. Setup Data
+    user = User(external_id=123, source=SourceType.TELEGRAM, full_name="Hacker")
+    test_session.add(user)
+    category = Category(name="General")
+    test_session.add(category)
+    await test_session.commit()
+
+    malicious_text = "=1+1" # Simple formula
+    ticket = Ticket(
+        user_id=user.id, daily_id=1, category_id=category.id,
+        source=SourceType.TELEGRAM, status=TicketStatus.NEW,
+        question_text=malicious_text,
+        created_at=datetime.datetime.now()
+    )
+    test_session.add(ticket)
+    await test_session.commit()
+
+    # 2. Mock Message and Command
+    msg = AsyncMock()
+    msg.from_user.id = settings.TG_ADMIN_ID # Authorize as admin
+    msg.answer_document = AsyncMock()
+
+    command = MagicMock(spec=CommandObject)
+    command.args = "30" # Export last 30 days
+
+    # 3. Call Handler
+    # We patch is_admin_or_mod to be sure
+    with patch("handlers.admin.is_admin_or_mod", return_value=True):
+        await export_statistics_cmd(msg, command, test_session)
+
+    # 4. Check Result
+    assert msg.answer_document.called
+    args, _ = msg.answer_document.call_args
+    file_input = args[0]
+
+    # Read content from BufferedInputFile
+    content = file_input.data.decode('utf-8-sig')
+
+    # Assert FIX
+    # We assert that the MALICIOUS text IS ESCAPED.
+
+    assert "'=1+1" in content, "CSV Injection vulnerability detected! The input was not escaped."

@@ -360,6 +360,18 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             delta = ticket.first_response_at - ticket.created_at
             first_response_mins = round(delta.total_seconds() / 60, 1)
         
+        # Prepare content and sanitize for CSV Injection
+        q_text = (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+
+        # Sanitize text to prevent CSV Injection (starting with =, +, -, @)
+        if q_text and q_text.strip().startswith(('=', '+', '-', '@')):
+            q_text = "'" + q_text
+
+        # Also sanitize user name just in case
+        u_name = ticket.user.full_name if ticket.user else ""
+        if u_name and u_name.strip().startswith(('=', '+', '-', '@')):
+            u_name = "'" + u_name
+
         writer.writerow([
             ticket.id,
             ticket.daily_id,
@@ -368,12 +380,12 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             ticket.status.value if ticket.status else "",
             ticket.priority.value if ticket.priority else "",
             ticket.category.name if ticket.category else "",
-            ticket.user.full_name if ticket.user else "",
+            u_name,
             ticket.user.external_id if ticket.user else "",
             ticket.assigned_staff.username if ticket.assigned_staff else "",
             first_response_mins if first_response_mins else "",
             ticket.rating if ticket.rating else "",
-            (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+            q_text
         ])
     
     # Prepare file
