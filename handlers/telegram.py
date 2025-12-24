@@ -267,8 +267,33 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     await callback.message.edit_text(
         f"Тема: <b>{category_name}</b>.\n✍️ Напишите ваш вопрос (можно прикрепить фото):",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💡 Пример обращения", callback_data="show_example_ticket")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+        ])
+    )
+
+@router.callback_query(F.data == "show_example_ticket")
+async def show_example_ticket(callback: types.CallbackQuery, state: FSMContext):
+    """Show an example ticket structure to guide the user."""
+    # Retrieve current category to keep context
+    data = await state.get_data()
+    category_name = data.get("category", "Общее")
+
+    example_text = (
+        f"Тема: <b>{category_name}</b>.\n\n"
+        "<b>💡 Пример хорошего обращения:</b>\n"
+        "<i>«Здравствуйте! Не могу зайти в личный кабинет студента. "
+        "Мой логин: ivanov.i, выдает ошибку '403 Forbidden'. Скриншот прилагаю.»</i>\n\n"
+        "✍️ <b>Теперь напишите ваш вопрос:</b>"
+    )
+
+    await callback.message.edit_text(
+        example_text,
+        parse_mode="HTML",
         reply_markup=get_back_kb()
     )
+    await callback.answer()
 
 # --- Media and Text Handlers ---
 
