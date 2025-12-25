@@ -63,22 +63,44 @@ async def create_ticket(
 ) -> Ticket:
     """Create a new ticket for a user.
     
+    This function handles the entire ticket creation process including:
+    1. User creation/update (based on external_id)
+    2. Category resolution (find existing or create new)
+    3. Atomic ticket ID generation (daily_id)
+    4. Automatic priority detection (based on keywords)
+    5. Saving the initial message
+    6. Fetching history for context
+    7. Sending notifications to staff
+
     Args:
-        session: Database session
-        user_id: External user ID (Telegram ID)
-        source: Source platform ('tg' or 'vk')
-        text: Question text (optional if media provided)
-        bot: Bot instance for notifications
-        category_name: Category name for the ticket
-        user_full_name: User's full name (default: "Unknown")
-        media_id: File ID for photo/document
-        content_type: Type of content ('text', 'photo', 'document')
-        
+        session: Database session for transaction management
+        user_id: External user ID (e.g., Telegram User ID)
+        source: Source platform (e.g., SourceType.TELEGRAM)
+        text: The content of the question/issue.
+        bot: Bot instance used to send notifications to staff.
+        category_name: The name of the category (e.g., "IT", "Dean's Office").
+        user_full_name: User's display name. Defaults to "Unknown".
+        media_id: Optional file_id if the ticket contains a photo or document.
+        content_type: Type of content: 'text', 'photo', or 'document'.
+
     Returns:
-        The created Ticket object
-        
+        Ticket: The newly created and persisted Ticket object.
+
     Raises:
-        ValueError: If text is empty (and no media) or too long
+        ValueError: If text is empty (and no media is provided) or exceeds limits.
+        Exception: Captures and logs notification failures, but does not rollback ticket creation.
+
+    Example:
+        >>> ticket = await create_ticket(
+        ...     session=session,
+        ...     user_id=123456789,
+        ...     source="tg",
+        ...     text="Login failed",
+        ...     bot=bot_instance,
+        ...     category_name="IT"
+        ... )
+        >>> print(ticket.status)
+        TicketStatus.NEW
     """
     # Validate inputs
     text = text.strip() if text else ""
@@ -285,11 +307,31 @@ async def _send_staff_notification(
     media_id: str = None,
     content_type: str = "text"
 ) -> Optional[TgMessage]:
-    """
-    Helper function to send notifications to staff.
-    Handles message construction, HTML escaping, and truncation of long messages.
-    Supports media attachments (photo/document).
-    Returns the sent Message object or None.
+    """Send a formatted notification to the staff chat.
+
+    Constructs a detailed message containing:
+    - Ticket metadata (ID, User, Category, Priority)
+    - User profile (Course, Group, Status)
+    - The message content (sanitized text and/or media)
+    - Historical context (previous tickets) if provided
+    - Action buttons (e.g., "Close Ticket")
+
+    Security:
+        - All user input (names, text, history) is sanitized via html.escape().
+        - Long messages are truncated to fit Telegram limits (4096 chars for text, 1024 for captions).
+
+    Args:
+        bot: Bot instance.
+        ticket: Ticket object.
+        user: User object.
+        text: The message text.
+        history_text: Optional history string.
+        is_new_ticket: Boolean flag indicating if this is a new ticket header.
+        media_id: Optional file_id for media.
+        content_type: Content type ('text', 'photo', 'document').
+
+    Returns:
+        Optional[TgMessage]: The sent Telegram Message object, or None if sending failed.
     """
     MAX_MESSAGE_LENGTH = 1024 if media_id else 4096 # Caption limit is 1024
 
