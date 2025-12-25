@@ -235,29 +235,36 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
         media_id = saved_media.get("media_id") if saved_media else None
         content_type = saved_media.get("content_type") if saved_media else "text"
 
-        t = await create_ticket(
-            session, callback.from_user.id, SourceType.TELEGRAM,
-            text_to_use, bot, category_name, callback.from_user.full_name,
-            media_id=media_id, content_type=content_type
-        )
+        try:
+            t = await create_ticket(
+                session, callback.from_user.id, SourceType.TELEGRAM,
+                text_to_use, bot, category_name, callback.from_user.full_name,
+                media_id=media_id, content_type=content_type
+            )
 
-        # Check working hours and send appropriate message
-        if is_within_working_hours():
+            # Check working hours and send appropriate message
+            if is_within_working_hours():
+                await callback.message.edit_text(
+                    f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
+                    f"Тема: {category_name}\n\n"
+                    f"🕒 Оператор ответит в рабочее время.\n"
+                    f"🔔 Вы получите уведомление об ответе.",
+                    parse_mode="HTML"
+                )
+            else:
+                await callback.message.edit_text(
+                    f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
+                    f"Тема: {category_name}\n\n"
+                    f"{get_off_hours_message()}",
+                    parse_mode="HTML"
+                )
+            await state.clear()
+        except ValueError as e:
             await callback.message.edit_text(
-                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
-                f"Тема: {category_name}\n\n"
-                f"🕒 Оператор ответит в рабочее время.\n"
-                f"🔔 Вы получите уведомление об ответе.",
-                parse_mode="HTML"
+                f"❌ <b>Ошибка:</b> {html.escape(str(e))}",
+                parse_mode="HTML",
+                reply_markup=get_back_kb()
             )
-        else:
-            await callback.message.edit_text(
-                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n"
-                f"Тема: {category_name}\n\n"
-                f"{get_off_hours_message()}",
-                parse_mode="HTML"
-            )
-        await state.clear()
         return
 
     # Исправлено: используем category_name, а не несуществующую category
@@ -271,6 +278,17 @@ async def select_cat(callback: types.CallbackQuery, state: FSMContext, session: 
     )
 
 # --- Media and Text Handlers ---
+
+# Special handler for unsupported content types during ticket creation
+@router.message(TicketForm.waiting_text, ~F.text & ~F.photo & ~F.document)
+async def handle_unsupported_content(message: types.Message, state: FSMContext):
+    """Catch-all for unsupported content (voice, video, sticker, etc.) during ticket creation."""
+    await message.reply(
+        "🙈 <b>Я не понимаю такой формат!</b>\n\n"
+        "Пожалуйста, отправьте текстовое сообщение или прикрепите фото/документ.\n"
+        "<i>Голосовые и видеосообщения мы пока не принимаем.</i>",
+        parse_mode="HTML"
+    )
 
 @router.message(F.text & ~F.text.startswith("/"))
 @router.message(F.photo)
@@ -324,27 +342,37 @@ async def handle_message_content(message: types.Message, state: FSMContext, bot:
         data = await state.get_data()
         category = data.get("category", "Общее")
 
-        t = await create_ticket(
-            session, message.from_user.id, SourceType.TELEGRAM,
-            text, bot, category, message.from_user.full_name,
-            media_id=media_id, content_type=content_type
-        )
-        
-        # Check working hours and send appropriate message
-        if is_within_working_hours():
-            await message.answer(
-                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
-                f"🕒 Оператор ответит в рабочее время.\n"
-                f"🔔 Вы получите уведомление об ответе.",
-                parse_mode="HTML"
+        try:
+            t = await create_ticket(
+                session, message.from_user.id, SourceType.TELEGRAM,
+                text, bot, category, message.from_user.full_name,
+                media_id=media_id, content_type=content_type
             )
-        else:
-            await message.answer(
-                f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
-                f"{get_off_hours_message()}",
-                parse_mode="HTML"
-            )
-        await state.clear()
+
+            # Check working hours and send appropriate message
+            if is_within_working_hours():
+                await message.answer(
+                    f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
+                    f"🕒 Оператор ответит в рабочее время.\n"
+                    f"🔔 Вы получите уведомление об ответе.",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    f"✅ <b>Заявка #{t.daily_id} принята!</b>\n\n"
+                    f"{get_off_hours_message()}",
+                    parse_mode="HTML"
+                )
+            await state.clear()
+        except ValueError as e:
+            # Catch validation errors (e.g. text too long)
+            await message.answer(f"❌ <b>Ошибка:</b> {html.escape(str(e))}", parse_mode="HTML")
+            # Do NOT clear state, let user try again
+        except Exception as e:
+            await message.answer("❌ Произошла ошибка при создании заявки. Попробуйте позже.")
+            await state.clear()
+            raise e
+
         return
 
     # 5. Если студент пишет сообщение без выбора меню — сохраняем его и просим выбрать тему
