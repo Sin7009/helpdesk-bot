@@ -6,13 +6,14 @@
 """
 import pytest
 import asyncio
+from contextlib import asynccontextmanager
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, TestClient
-from unittest.mock import patch, AsyncMock
+from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
+from unittest.mock import patch, AsyncMock, MagicMock
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from webapp.server import create_app
-from database.models import Base, User, Ticket, Message, Category, SourceType, TicketStatus, SenderRole
+from database.models import Base, User, Ticket, Message, Category, SourceType, TicketStatus, SenderRole, UserRole
 
 
 @pytest.fixture
@@ -79,8 +80,8 @@ async def populate_stress_data(webapp_stress_session):
             msg = Message(
                 ticket_id=i + 1,  # Will be set after flush
                 sender_role=SenderRole.USER,
-                text=f"Message for ticket {i}",
-                external_message_id=1000 + i
+                text=f"Message for ticket {i}"
+                # Removed incorrect external_message_id
             )
             ticket.messages.append(msg)
     
@@ -101,19 +102,14 @@ class TestWebAppStress:
         data = populate_stress_data
         users = data["users"]
         
-        # Мокаем new_session чтобы использовать нашу тестовую сессию
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 # Делаем 50 одновременных запросов
                 tasks = []
                 for i in range(50):
@@ -142,18 +138,14 @@ class TestWebAppStress:
         data = populate_stress_data
         users = data["users"]
         
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 # Получаем детали 30 разных тикетов одновременно
                 tasks = []
                 for ticket_id in range(1, 31):
@@ -175,7 +167,7 @@ class TestWebAppStress:
         """
         app = create_app()
         
-        async with TestClient(app) as client:
+        async with TestClient(TestServer(app)) as client:
             # Делаем 200 одновременных запросов к health endpoint
             tasks = [client.get('/health') for _ in range(200)]
             responses = await asyncio.gather(*tasks)
@@ -194,18 +186,33 @@ class TestWebAppStress:
         """
         Тест обработки некорректных запросов.
         """
+
+        # Configure the mock to return a session that behaves like a real one
+        # but fails for database lookups in a controlled way or just returns empty/None
+
+        mock_session = AsyncMock()
+        mock_result = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_user = MagicMock(spec=User)
+        mock_user.role = UserRole.USER
+        mock_user.id = 123
+        mock_user.user_id = 123 # Fix for AttributeError
+
+        async def side_effect_scalar(*args, **kwargs):
+            return mock_user
+
+        # Ensure subsequent calls return None
+        mock_result.scalar_one_or_none = MagicMock(side_effect=[mock_user, None])
+
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return AsyncMock()
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield mock_session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 # Запрос без user_id
                 resp1 = await client.get('/api/tickets')
                 assert resp1.status == 400
@@ -215,8 +222,9 @@ class TestWebAppStress:
                 assert resp2.status == 400
                 
                 # Запрос к несуществующему тикету
+                # Note: We rely on the second call to scalar_one_or_none returning None
                 resp3 = await client.get('/api/tickets/99999?user_id=123')
-                # Может быть 404 или 200 с пустым результатом, зависит от реализации
+
                 assert resp3.status in [200, 404]
 
 
@@ -229,18 +237,14 @@ class TestWebAppStress:
         data = populate_stress_data
         users = data["users"]
         
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 tasks = []
                 
                 # 25 запросов списка тикетов
@@ -281,18 +285,14 @@ class TestWebAppEdgeCases:
         session.add(user)
         await session.commit()
         
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 resp = await client.get(f'/api/tickets?user_id={user.external_id}')
                 assert resp.status == 200
                 
@@ -305,6 +305,7 @@ class TestWebAppEdgeCases:
         """
         Тест запроса для несуществующего пользователя.
         """
+        @asynccontextmanager
         async def mock_new_session():
             engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
             async with engine.begin() as conn:
@@ -312,20 +313,14 @@ class TestWebAppEdgeCases:
             
             async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
             
-            class MockSession:
-                async def __aenter__(self):
-                    self.session = async_session_factory()
-                    return await self.session.__aenter__()
-                async def __aexit__(self, *args):
-                    await self.session.__aexit__(*args)
-                    await engine.dispose()
-            
-            return MockSession()
+            async with async_session_factory() as session:
+                yield session
+            await engine.dispose()
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 resp = await client.get('/api/tickets?user_id=999999')
                 assert resp.status == 200
                 
@@ -371,18 +366,14 @@ class TestWebAppEdgeCases:
         
         await session.commit()
         
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 resp = await client.get(f'/api/tickets?user_id={user.external_id}')
                 assert resp.status == 200
                 
@@ -399,27 +390,21 @@ class TestWebAppSecurity:
         """
         Тест защиты от SQL инъекций.
         """
+        @asynccontextmanager
         async def mock_new_session():
             engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             
             async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-            
-            class MockSession:
-                async def __aenter__(self):
-                    self.session = async_session_factory()
-                    return await self.session.__aenter__()
-                async def __aexit__(self, *args):
-                    await self.session.__aexit__(*args)
-                    await engine.dispose()
-            
-            return MockSession()
+            async with async_session_factory() as session:
+                yield session
+            await engine.dispose()
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 # Попытка SQL инъекции через user_id
                 malicious_ids = [
                     "1 OR 1=1",
@@ -473,18 +458,14 @@ class TestWebAppSecurity:
         session.add(ticket)
         await session.commit()
         
+        @asynccontextmanager
         async def mock_new_session():
-            class MockSession:
-                async def __aenter__(self):
-                    return session
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            yield session
         
         with patch('webapp.server.new_session', side_effect=mock_new_session):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 resp = await client.get(f'/api/tickets?user_id={user.external_id}')
                 assert resp.status == 200
                 
@@ -502,18 +483,17 @@ class TestWebAppResilience:
         """
         Тест обработки ошибок базы данных.
         """
+        @asynccontextmanager
         async def mock_new_session_error():
-            class MockSession:
-                async def __aenter__(self):
-                    raise Exception("Database connection failed")
-                async def __aexit__(self, *args):
-                    pass
-            return MockSession()
+            # This simulates an error occurring during the context manager entry or use
+            # Since session creation is inside __aenter__, raising here simulates connection failure
+            raise Exception("Database connection failed")
+            yield
         
         with patch('webapp.server.new_session', side_effect=mock_new_session_error):
             app = create_app()
             
-            async with TestClient(app) as client:
+            async with TestClient(TestServer(app)) as client:
                 resp = await client.get('/api/tickets?user_id=123')
                 # Должен вернуть ошибку, но не упасть
                 assert resp.status in [500, 503]
@@ -526,7 +506,7 @@ class TestWebAppResilience:
         """
         app = create_app()
         
-        async with TestClient(app) as client:
+        async with TestClient(TestServer(app)) as client:
             # Запросы с некорректными параметрами
             test_cases = [
                 '/api/tickets?user_id=',  # Пустой ID
