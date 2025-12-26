@@ -297,6 +297,16 @@ async def show_example_ticket(callback: types.CallbackQuery, state: FSMContext):
 
 # --- Media and Text Handlers ---
 
+@router.message(F.sticker | F.animation | F.voice | F.video_note | F.video)
+async def handle_unsupported_content(message: types.Message):
+    """Humorous handler for unsupported media types."""
+    # [FUN] Feature: Reply with a joke instead of silence
+    await message.answer(
+        "Ого, какая штука! 😲\n"
+        "Но мои нейросети обучены только на текстах и картинках (да, я старомоден 📼).\n"
+        "Пожалуйста, опишите словами или пришлите фото/документ! 📝"
+    )
+
 @router.message(F.text & ~F.text.startswith("/"))
 @router.message(F.photo)
 @router.message(F.document)
