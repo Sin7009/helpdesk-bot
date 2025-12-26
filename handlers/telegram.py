@@ -8,8 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import html
 
-# --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
-from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
+# --- ВАЖНО: Добавлен импорт get_active_ticket, add_message_to_ticket и TicketUpdateResult ---
+from services.ticket_service import (
+    create_ticket,
+    get_active_ticket,
+    add_message_to_ticket,
+    TicketUpdateResult,
+    get_latest_ticket
+)
 from services.faq_service import FAQService
 from services.working_hours_service import is_within_working_hours, get_off_hours_message
 from database.models import Ticket, TicketStatus, User, SourceType
@@ -331,10 +337,47 @@ async def handle_message_content(message: types.Message, state: FSMContext, bot:
 
     if active_ticket:
         # Add message to existing ticket
-        await add_message_to_ticket(session, active_ticket, text, bot, media_id=media_id, content_type=content_type)
-        await message.answer("✅ Сообщение добавлено к диалогу.")
+        result = await add_message_to_ticket(session, active_ticket, text, bot, media_id=media_id, content_type=content_type)
+        if result == TicketUpdateResult.ADDED:
+            await message.answer("✅ Сообщение добавлено к диалогу.")
+        elif result == TicketUpdateResult.REOPENED:
+            await message.answer("🔄 Заявка была закрыта, но мы её переоткрыли. Оператор скоро ответит.")
+        elif result == TicketUpdateResult.GRATITUDE:
+            await message.answer("Рады помочь! Обращайтесь ещё. 👋")
+
         await state.clear()
         return
+
+    # 3b. Check for RECENT CLOSED ticket (Smart Gratitude Handling)
+    # If the user says "thanks" and they have a recently closed ticket, we should treat it as gratitude
+    # instead of a new ticket request.
+
+    # Get the LATEST ticket (regardless of status)
+    latest_ticket = await get_latest_ticket(session, message.from_user.id, SourceType.TELEGRAM)
+
+    if latest_ticket and latest_ticket.status == TicketStatus.CLOSED:
+        # Try to add message to it. add_message_to_ticket handles the "gratitude check".
+        # If it's gratitude, it will return GRATITUDE.
+        # If it's a real question, it will REOPEN the ticket.
+
+        # We assume if the user writes again, they likely want to continue the context
+        # UNLESS the ticket is very old. Let's say... any closed ticket is fair game for now.
+
+        result = await add_message_to_ticket(session, latest_ticket, text, bot, media_id=media_id, content_type=content_type)
+
+        if result == TicketUpdateResult.GRATITUDE:
+            # It was just "Thanks"
+            await message.answer("Рады помочь! Обращайтесь ещё. 👋")
+            await state.clear()
+            return
+        elif result == TicketUpdateResult.REOPENED:
+            # It was a new question, so we reopened the old ticket
+            await message.answer("🔄 Мы переоткрыли вашу последнюю заявку. Оператор увидит сообщение.")
+            await state.clear()
+            return
+
+        # If result is ADDED, it means it was active... but we checked it was CLOSED.
+        # So it must be REOPENED or GRATITUDE.
 
     # 4. If no ticket - check state for new ticket creation
     current_state = await state.get_state()
@@ -551,12 +594,17 @@ async def process_comment(message: types.Message, state: FSMContext, session: As
         await state.clear()
         return
 
-    await add_message_to_ticket(
+    result = await add_message_to_ticket(
         session, ticket, text, bot,
         media_id=media_id, content_type=content_type
     )
 
-    await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
+    if result == TicketUpdateResult.REOPENED:
+        await message.answer(f"🔄 Заявка #{ticket.daily_id} переоткрыта. Комментарий добавлен.")
+    elif result == TicketUpdateResult.GRATITUDE:
+        await message.answer("Рады помочь! Обращайтесь ещё. 👋")
+    else:
+        await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
 
     await state.clear()
     # Optionally show the ticket details again?
