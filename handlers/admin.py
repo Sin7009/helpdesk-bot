@@ -352,6 +352,14 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
         "Текст вопроса"
     ])
     
+    # Prepare data with CSV injection protection
+    # Prepend ' to fields starting with =, +, -, @
+    def sanitize_csv(val):
+        val_str = str(val) if val is not None else ""
+        if val_str.startswith(('=', '+', '-', '@')):
+            return f"'{val_str}"
+        return val_str
+
     # Data rows
     for ticket in tickets:
         # Calculate first response time in minutes
@@ -360,6 +368,9 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             delta = ticket.first_response_at - ticket.created_at
             first_response_mins = round(delta.total_seconds() / 60, 1)
         
+        user_name = ticket.user.full_name if ticket.user else ""
+        question_text = (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+
         writer.writerow([
             ticket.id,
             ticket.daily_id,
@@ -368,12 +379,12 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             ticket.status.value if ticket.status else "",
             ticket.priority.value if ticket.priority else "",
             ticket.category.name if ticket.category else "",
-            ticket.user.full_name if ticket.user else "",
+            sanitize_csv(user_name),
             ticket.user.external_id if ticket.user else "",
             ticket.assigned_staff.username if ticket.assigned_staff else "",
             first_response_mins if first_response_mins else "",
             ticket.rating if ticket.rating else "",
-            (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+            sanitize_csv(question_text)
         ])
     
     # Prepare file
