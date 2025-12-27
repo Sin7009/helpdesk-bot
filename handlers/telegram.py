@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 import html
 
 # --- ВАЖНО: Добавлен импорт get_active_ticket и add_message_to_ticket ---
-from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket
+from services.ticket_service import create_ticket, get_active_ticket, add_message_to_ticket, TicketUpdateResult
 from services.faq_service import FAQService
 from services.working_hours_service import is_within_working_hours, get_off_hours_message
 from database.models import Ticket, TicketStatus, User, SourceType
@@ -319,22 +319,30 @@ async def handle_message_content(message: types.Message, state: FSMContext, bot:
         content_type = "document"
         media_id = message.document.file_id
 
-    # 2. Check FAQ (only for pure text messages)
+    # 2. Check for active ticket FIRST
+    # (Prevents FAQ triggering when user is talking to support)
+    active_ticket = await get_active_ticket(session, message.from_user.id, SourceType.TELEGRAM)
+
+    if active_ticket:
+        # Add message to existing ticket
+        result = await add_message_to_ticket(session, active_ticket, text, bot, media_id=media_id, content_type=content_type)
+
+        if result == TicketUpdateResult.REOPENED:
+             await message.answer("✅ Сообщение добавлено. Ваш тикет был переоткрыт, оператор скоро ответит.")
+        elif result == TicketUpdateResult.GRATITUDE:
+             await message.answer("Рад был помочь! Обращайтесь ещё. 🤝")
+        else:
+             await message.answer("✅ Сообщение добавлено к диалогу.")
+
+        await state.clear()
+        return
+
+    # 3. Check FAQ (only for pure text messages, AND if no active ticket)
     if content_type == "text" and text:
         faq = FAQService.find_match(text)
         if faq:
             await message.answer(f"🤖 <b>Подсказка:</b>\n{faq.answer_text}\n\nЕсли это не помогло, выберите категорию заново: /start", parse_mode="HTML")
             return
-
-    # 3. Check for active ticket
-    active_ticket = await get_active_ticket(session, message.from_user.id, SourceType.TELEGRAM)
-
-    if active_ticket:
-        # Add message to existing ticket
-        await add_message_to_ticket(session, active_ticket, text, bot, media_id=media_id, content_type=content_type)
-        await message.answer("✅ Сообщение добавлено к диалогу.")
-        await state.clear()
-        return
 
     # 4. If no ticket - check state for new ticket creation
     current_state = await state.get_state()
@@ -551,12 +559,17 @@ async def process_comment(message: types.Message, state: FSMContext, session: As
         await state.clear()
         return
 
-    await add_message_to_ticket(
+    result = await add_message_to_ticket(
         session, ticket, text, bot,
         media_id=media_id, content_type=content_type
     )
 
-    await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
+    if result == TicketUpdateResult.REOPENED:
+         await message.answer(f"✅ Комментарий добавлен. Заявка #{ticket.daily_id} переоткрыта.")
+    elif result == TicketUpdateResult.GRATITUDE:
+         await message.answer("Рад был помочь! Обращайтесь ещё. 🤝")
+    else:
+         await message.answer(f"✅ Комментарий добавлен к заявке #{ticket.daily_id}.")
 
     await state.clear()
     # Optionally show the ticket details again?

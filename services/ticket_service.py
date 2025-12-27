@@ -5,6 +5,7 @@ import re
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update
+from enum import Enum, auto
 from sqlalchemy.orm import selectinload, contains_eager
 from database.models import Ticket, User, Message, TicketStatus, SourceType, SenderRole, Category, TicketPriority
 from database.repositories.ticket_repository import TicketRepository
@@ -24,6 +25,11 @@ GRATITUDE_WORDS = {
 
 # Максимальная длина сообщения, чтобы считаться "простой благодарностью"
 MAX_GRATITUDE_LENGTH = 15
+
+class TicketUpdateResult(Enum):
+    ADDED = auto()
+    REOPENED = auto()
+    GRATITUDE = auto()
 
 async def get_next_daily_id(session: AsyncSession) -> int:
     """Get the next daily_id atomically using a counter table.
@@ -184,7 +190,7 @@ async def add_message_to_ticket(
     bot: Bot,
     media_id: str = None,
     content_type: str = "text"
-) -> None:
+) -> TicketUpdateResult:
     """Add a user message to an existing ticket and notify staff.
     
     This function adds a new message from the user to the ticket's message
@@ -202,6 +208,9 @@ async def add_message_to_ticket(
         media_id: File ID if present
         content_type: Type of content
         
+    Returns:
+        TicketUpdateResult indicating whether the message was added, ticket reopened, or it was gratitude.
+
     Raises:
         ValueError: If content_type is "photo" or "document" but media_id is None
         
@@ -231,14 +240,18 @@ async def add_message_to_ticket(
 
     # Re-open logic
     should_reopen = False
+    result = TicketUpdateResult.ADDED
+
     if ticket.status == TicketStatus.CLOSED:
         if not is_gratitude:
             should_reopen = True
             ticket.status = TicketStatus.IN_PROGRESS
             ticket.closed_at = None
+            result = TicketUpdateResult.REOPENED
             # Could log re-opening here
         else:
             # It is gratitude, do NOT reopen
+            result = TicketUpdateResult.GRATITUDE
             pass
 
     # Add message
@@ -273,6 +286,8 @@ async def add_message_to_ticket(
             logger.error(f"⚠️ Failed to notify staff about new message: {e}")
     else:
         logger.info(f"Skipping staff notification for gratitude in closed ticket #{ticket.id}")
+
+    return result
 
 
 async def _send_staff_notification(
