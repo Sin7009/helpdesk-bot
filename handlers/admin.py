@@ -334,7 +334,16 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
     # Create CSV
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
+    def sanitize_csv(text: str | None) -> str:
+        """Sanitize text to prevent CSV Injection (Excel formulas)."""
+        if not text:
+            return ""
+        text = str(text)
+        if text.startswith(("=", "+", "-", "@")):
+            return "'" + text
+        return text
+
     # Header
     writer.writerow([
         "ID",
@@ -360,6 +369,10 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             delta = ticket.first_response_at - ticket.created_at
             first_response_mins = round(delta.total_seconds() / 60, 1)
         
+        user_fullname = ticket.user.full_name if ticket.user else ""
+        username_staff = ticket.assigned_staff.username if ticket.assigned_staff else ""
+        question_text = (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+
         writer.writerow([
             ticket.id,
             ticket.daily_id,
@@ -367,13 +380,13 @@ async def export_statistics_cmd(message: types.Message, command: CommandObject, 
             ticket.closed_at.strftime("%Y-%m-%d %H:%M") if ticket.closed_at else "",
             ticket.status.value if ticket.status else "",
             ticket.priority.value if ticket.priority else "",
-            ticket.category.name if ticket.category else "",
-            ticket.user.full_name if ticket.user else "",
+            sanitize_csv(ticket.category.name if ticket.category else ""),
+            sanitize_csv(user_fullname),
             ticket.user.external_id if ticket.user else "",
-            ticket.assigned_staff.username if ticket.assigned_staff else "",
+            sanitize_csv(username_staff),
             first_response_mins if first_response_mins else "",
             ticket.rating if ticket.rating else "",
-            (ticket.question_text[:100] + "...") if ticket.question_text and len(ticket.question_text) > 100 else (ticket.question_text or "")
+            sanitize_csv(question_text)
         ])
     
     # Prepare file

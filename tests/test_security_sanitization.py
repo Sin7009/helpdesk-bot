@@ -1,5 +1,7 @@
 import pytest
 import html
+import csv
+import io
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.models import Base, User, SourceType, Category, Ticket, TicketStatus, TicketPriority
@@ -210,15 +212,6 @@ async def test_history_sanitization(test_session):
 async def test_staff_notification_injection_via_profile(test_session):
     """
     ATTACK VECTOR: Stored XSS / HTML Injection via User Profile (Group/Department)
-
-    1. A malicious user registers or updates their profile with HTML tags in 'group' or 'department'.
-       e.g. Group = "<b>HACK</b>" or "<script>" or "<a href...>"
-    2. The input is saved to the DB without sanitization (which is acceptable for storage).
-    3. The user creates a ticket.
-    4. The system sends a notification to the Staff Chat.
-    5. The notification builder inserts the user's group/department into the message template.
-    6. If the builder uses f-strings with `parse_mode='HTML'` WITHOUT escaping the profile data,
-       the malicious HTML is rendered (or breaks the message if invalid).
     """
 
     # 1. Setup malicious user in DB
@@ -290,14 +283,6 @@ async def test_staff_notification_injection_via_profile(test_session):
 async def test_admin_reply_html_injection(test_session):
     """
     VULNERABILITY TEST: HTML Injection in Admin Replies.
-
-    Scenario:
-    1. An admin (or compromised mod) replies to a user.
-    2. The reply text contains malicious HTML (e.g., <a href="bad.site">Click me</a>).
-    3. The system constructs the message using f-string with parse_mode='HTML'.
-    4. If not escaped, the HTML is rendered.
-
-    The test fails if the mock_bot.send_message receives unescaped HTML.
     """
 
     # 1. Setup Data
@@ -350,9 +335,6 @@ async def test_admin_reply_html_injection(test_session):
     )
 
     # 5. Verify the Vulnerability
-    # If the code is VULNERABLE, it will send the payload AS IS.
-    # If SECURE, it should send escaped text: &lt;a href=...
-
     call_args = mock_bot.send_message.call_args
     assert call_args is not None, "Bot should have sent a message"
 
@@ -360,7 +342,84 @@ async def test_admin_reply_html_injection(test_session):
 
     print(f"\nSent Text: {sent_text}\n")
 
-    # Let's write it as a Security Test that expects CLEAN output.
-    # Failure means vulnerability.
     assert "&lt;a href" in sent_text or "<a" not in sent_text, \
         "VULNERABILITY DETECTED: HTML Injection in Admin Reply was rendered!"
+
+
+@pytest.mark.asyncio
+async def test_csv_formula_injection(test_session):
+    """
+    ATTACK VECTOR: CSV Formula Injection (Excel Macro Injection).
+
+    1. User inputs a name or text starting with `=`, `+`, `-`, or `@`.
+    2. Admin exports statistics to CSV.
+    3. If opened in Excel, the cell executes as a formula.
+
+    The test checks if the output CSV contains sanitized values (prepended with ').
+    """
+    from handlers.admin import export_statistics_cmd
+    from aiogram import types
+    from aiogram.filters import CommandObject
+
+    # 1. Setup Vulnerable Data
+    user = User(
+        external_id=999,
+        source=SourceType.TELEGRAM,
+        full_name="=cmd|' /C calc'!A0", # Malicious Name
+        username="hacker"
+    )
+    test_session.add(user)
+
+    category = Category(name="General")
+    test_session.add(category)
+    await test_session.commit()
+
+    ticket = Ticket(
+        user_id=user.id,
+        daily_id=1,
+        category_id=category.id,
+        source=SourceType.TELEGRAM,
+        status=TicketStatus.NEW,
+        question_text="+SUM(1+1)*cmd", # Malicious Text
+        priority=TicketPriority.NORMAL
+    )
+    test_session.add(ticket)
+    await test_session.commit()
+
+    # 2. Mock Admin Command
+    mock_message = AsyncMock(spec=types.Message)
+    mock_message.from_user = MagicMock()
+    mock_message.from_user.id = 777 # Admin
+    mock_message.answer = AsyncMock()
+    mock_message.answer_document = AsyncMock()
+
+    command = CommandObject(prefix="/", command="export", args="30")
+
+    # Patch permissions
+    with patch("handlers.admin.is_admin_or_mod", return_value=True):
+        await export_statistics_cmd(mock_message, command, test_session)
+
+    # 3. Check CSV Output
+    assert mock_message.answer_document.called
+    args, kwargs = mock_message.answer_document.call_args
+
+    buffered_file = args[0]
+    # Read the content back from the bytes buffer
+    # BufferedInputFile holds the bytes in .data
+    content_bytes = buffered_file.data
+    content_str = content_bytes.decode('utf-8-sig') # Handle BOM
+
+    print(f"\nCSV Content:\n{content_str}\n")
+
+    # Check for User Full Name
+    # Vulnerable behavior: contains "=cmd|' /C calc'!A0"
+    # Secure behavior: contains "'=cmd|' /C calc'!A0"
+
+    # Verify the FIX: ensure all malicious payloads are prefixed with '
+
+    # Note: CSV writer might quote the field if it contains delimiters.
+    # e.g. "'=cmd|' /C calc'!A0" might be written as "\"'=cmd|' /C calc'!A0\""
+    # But the raw content must contain the single quote before the equals/plus sign.
+
+    assert "'=cmd|" in content_str, "CSV Injection Vulnerability detected! Name not sanitized."
+    assert "'+SUM" in content_str, "CSV Injection Vulnerability detected! Text not sanitized."
