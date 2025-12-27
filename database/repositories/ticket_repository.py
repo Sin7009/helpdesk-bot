@@ -30,6 +30,25 @@ class TicketRepository(BaseRepository[Ticket]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_latest_by_user_external(self, user_id: int, source: str) -> Optional[Ticket]:
+        """Find the most recent ticket for the user (by external ID), regardless of status.
+
+        Includes eager loading of user and category.
+        """
+        stmt = (
+            select(Ticket)
+            .join(Ticket.user)
+            .options(contains_eager(Ticket.user), selectinload(Ticket.category))
+            .where(
+                User.external_id == user_id,
+                User.source == source
+            )
+            .order_by(desc(Ticket.created_at))
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_by_admin_message_id(self, message_id: int) -> Optional[Ticket]:
         """Find a ticket by the admin message ID in the staff chat."""
         stmt = (

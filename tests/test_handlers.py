@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User as TgUser, Chat
 from database.models import User, Ticket, TicketStatus, Category
 from handlers.telegram import cmd_start, select_cat, handle_message_content, TicketForm
+from services.ticket_service import TicketUpdateResult
 from core.config import settings
 
 @pytest.fixture
@@ -147,6 +148,9 @@ async def test_handle_text_active_ticket_add_message(mock_session, mock_state, m
         mock_ticket = MagicMock()
         mock_get_active_ticket.return_value = mock_ticket
 
+        # Configure return value as ADDED
+        mock_add_message.return_value = TicketUpdateResult.ADDED
+
         await handle_message_content(message, mock_state, mock_bot, mock_session)
 
         mock_add_message.assert_called_once()
@@ -172,10 +176,12 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
 
     with patch("handlers.telegram.FAQService") as MockFAQService, \
          patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket, \
-         patch("handlers.telegram.create_ticket", new_callable=AsyncMock) as mock_create_ticket:
+         patch("handlers.telegram.create_ticket", new_callable=AsyncMock) as mock_create_ticket, \
+         patch("handlers.telegram.get_latest_ticket", new_callable=AsyncMock) as mock_get_latest_ticket:
 
         MockFAQService.find_match.return_value = None
         mock_get_active_ticket.return_value = None
+        mock_get_latest_ticket.return_value = None
 
         # Mock created ticket
         ticket = MagicMock()
