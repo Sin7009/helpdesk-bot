@@ -177,11 +177,13 @@ async def test_handle_text_create_ticket_success_message(mock_session, mock_stat
     with patch("handlers.telegram.FAQService") as MockFAQService, \
          patch("handlers.telegram.get_active_ticket", new_callable=AsyncMock) as mock_get_active_ticket, \
          patch("handlers.telegram.create_ticket", new_callable=AsyncMock) as mock_create_ticket, \
-         patch("handlers.telegram.get_latest_ticket", new_callable=AsyncMock) as mock_get_latest_ticket:
+         patch("handlers.telegram.get_latest_ticket", new_callable=AsyncMock) as mock_get_latest_ticket, \
+         patch("handlers.telegram.is_within_working_hours") as mock_working_hours:
 
         MockFAQService.find_match.return_value = None
         mock_get_active_ticket.return_value = None
         mock_get_latest_ticket.return_value = None
+        mock_working_hours.return_value = True  # Mock working hours to return True
 
         # Mock created ticket
         ticket = MagicMock()
