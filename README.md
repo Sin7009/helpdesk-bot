@@ -32,6 +32,7 @@
 - [⚡ Стресс-тестирование](#-стресс-тестирование)
 - [🐳 Docker и деплой](#-docker-и-деплой)
 - [🔒 Безопасность](#-безопасность)
+- [🧠 Agent Memory System](#-agent-memory-system)
 - [❓ FAQ и Troubleshooting](#-faq-и-troubleshooting)
 - [🗺 Roadmap](#-roadmap)
 - [📚 Документация](#-документация)
@@ -989,6 +990,89 @@ await bot.send_message(
 
 ---
 
+## 🧠 Agent Memory System
+
+Проект включает систему хранения памяти агентов для GitHub Copilot — структурированный способ документирования важных фактов, конвенций и паттернов кодовой базы.
+
+### Что это такое?
+
+Agent Memory System хранит знания о проекте в формате markdown файлов, которые помогают:
+- **GitHub Copilot агентам** генерировать более точные предложения
+- **Разработчикам** быстро понимать конвенции проекта
+- **Команде** поддерживать консистентность кода
+
+### Категории памяти
+
+Memories организованы по категориям:
+- 🏗 **Architecture** — архитектурные паттерны
+- 📝 **Coding Style** — стиль и конвенции кода
+- 🔒 **Security** — требования безопасности
+- 🧪 **Testing** — паттерны тестирования
+- 🚀 **Deployment** — развертывание и инфраструктура
+- 💼 **Business Logic** — доменная логика
+- 🗄 **Database** — паттерны работы с БД
+
+### Быстрый старт
+
+```bash
+# Инициализация с дефолтными памятями (15+ записей)
+python manage_memories.py init
+
+# Просмотр всех категорий
+python manage_memories.py list
+
+# Просмотр конкретной категории
+python manage_memories.py view security
+
+# Поиск по ключевому слову
+python manage_memories.py search "async"
+
+# Добавление новой памяти
+python manage_memories.py store \
+  "Subject" "Fact about codebase" \
+  --category coding_style \
+  --citations "file.py:42" \
+  --reason "Why this matters" \
+  --tags "tag1,tag2"
+```
+
+### Примеры хранимых знаний
+
+Система содержит важные факты, такие как:
+
+```markdown
+## HTML Escape
+Fact: Всегда используй html.escape() для пользовательского 
+      ввода в Telegram сообщениях с parse_mode='HTML'
+Why: Предотвращает HTML injection атаки
+Source: services/ticket_service.py:4, handlers/telegram.py
+Tags: security, xss, html, telegram
+```
+
+```markdown
+## Асинхронность
+Fact: Все I/O операции должны быть асинхронными (async/await)
+Why: Проект использует aiogram 3.x и SQLAlchemy 2.0 Async
+Source: core/config.py, services/ticket_service.py
+Tags: async, performance, aiogram
+```
+
+### Тестирование
+
+Система включает 16 тестов с полным покрытием:
+
+```bash
+# Запуск тестов памяти
+pytest tests/test_agent_memory_service.py -v
+
+# С покрытием
+pytest tests/test_agent_memory_service.py --cov=services.agent_memory_service
+```
+
+> 📖 **Подробнее:** См. [AGENT_MEMORY_GUIDE.md](.github/agents/AGENT_MEMORY_GUIDE.md)
+
+---
+
 ## ❓ FAQ и Troubleshooting
 
 ### Частые проблемы
@@ -1078,6 +1162,7 @@ SQLite не поддерживает concurrent writes. Для высокой н
 |----------|----------|
 | [QUICK_START.md](QUICK_START.md) | Быстрый старт и примеры использования |
 | [TESTING.md](TESTING.md) | 🧪 **Полное руководство по тестированию и стресс-тестам** |
+| [AGENT_MEMORY_GUIDE.md](.github/agents/AGENT_MEMORY_GUIDE.md) | 🧠 **Система хранения памяти агентов** |
 | [UNIVERSITY_IMPROVEMENTS.md](UNIVERSITY_IMPROVEMENTS.md) | Подробное руководство по университетским функциям |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Руководство для разработчиков |
 | [ALEMBIC_GUIDE.md](ALEMBIC_GUIDE.md) | Работа с миграциями базы данных |
